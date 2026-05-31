@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef } from 'react'
+import { useState, useEffect } from 'react'
 import { METRICS, RECENT_ALERTS, RECENT_TRANSACTIONS } from '../data/mockData'
 
 function MetricCard({ label, value, format, delta, accentColor, delay }) {
