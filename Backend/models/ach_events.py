@@ -3,7 +3,7 @@
 # necessary imports
 
 import hashlib
-from datetime import datetime
+from datetime import date, datetime
 from enum import Enum
 from typing import Any, Optional
 
@@ -53,7 +53,7 @@ class BaseACHEvent(BasePaymentEvent):
     sec_code: SECCode
 
     # when to expect settlement
-    expected_settlement_date: datetime | None = Field(default=None)
+    expected_settlement_date: date | None = Field(default=None)
 
     # only populated when the transaction is returned
     return_code: Optional[str] = Field(default=None, min_length=3, max_length=3)
