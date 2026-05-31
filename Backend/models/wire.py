@@ -50,9 +50,9 @@ class JurisdictionRiskTier(str, Enum):
 
 # geographic and jurisdictional risk assessment for wire transfer
 class GeoRiskProfile(BaseModel):
-    sender_country: str
-    receiver_country: str
-    correspondent_countries: List[str] = []
+    sender_country: str = Field(..., min_length=2, max_length=2)
+    receiver_country: str = Field(..., min_length=2, max_length=2)
+    correspondent_countries: List[str] = Field(default_factory=list)
     sender_risk_tier: JurisdictionRiskTier
     receiver_risk_tier: JurisdictionRiskTier
     max_chain_risk_tier: JurisdictionRiskTier
@@ -66,13 +66,13 @@ class GeoRiskProfile(BaseModel):
 # regulatory compliance flags for wire transfer
 class RegulatoryProfile(BaseModel):
     ctr_triggered: bool = False
-    ctr_threshold_currency: str = "USD"
-    ctr_threshold_amount: int = 1_000_000
+    ctr_threshold_currency: str = Field(default="USD", min_length=3, max_length=3)
+    ctr_threshold_amount: int = Field(default=1_000_000, gt=0)
     structuring_flag: bool = False
     is_round_number: bool = False
     travel_rule_applies: bool = False
     travel_rule_complete: bool = True
-    beneficiary_info_score: float = 1.0
+    beneficiary_info_score: float = Field(default=1.0, ge=0.0, le=1.0)
     is_off_hours: bool = False
     sanctions_screened: bool = False
     sanctions_hit: bool = False
@@ -80,72 +80,72 @@ class RegulatoryProfile(BaseModel):
 
 # correspondent bank in a wire transfer chain
 class CorrespondentHop(BaseModel):
-    bank_id: str
-    bank_name: str
-    country: str
-    role: str
+    bank_id: str = Field(..., min_length=1, max_length=64)
+    bank_name: str = Field(..., min_length=1, max_length=128)
+    country: str = Field(..., min_length=2, max_length=2)
+    role: str = Field(..., min_length=1, max_length=32)
 
 
 # raw fedwire event from inbound message
 class RawFedwireEvent(BaseModel):
-    imad: str
-    omad: Optional[str] = None
-    sender_aba: str
-    sender_account: str
-    sender_name: str
-    sender_state: Optional[str] = None
-    receiver_aba: str
-    receiver_account: str
-    receiver_name: str
-    receiver_state: Optional[str] = None
-    amount: int
-    currency: str = "USD"
+    imad: str = Field(..., min_length=1, max_length=22)
+    omad: Optional[str] = Field(default=None, max_length=22)
+    sender_aba: str = Field(..., min_length=9, max_length=9)
+    sender_account: str = Field(..., min_length=1, max_length=34)
+    sender_name: str = Field(..., min_length=1, max_length=35)
+    sender_state: Optional[str] = Field(default=None, min_length=2, max_length=2)
+    receiver_aba: str = Field(..., min_length=9, max_length=9)
+    receiver_account: str = Field(..., min_length=1, max_length=34)
+    receiver_name: str = Field(..., min_length=1, max_length=35)
+    receiver_state: Optional[str] = Field(default=None, min_length=2, max_length=2)
+    amount: int = Field(..., gt=0)
+    currency: str = Field(default="USD", min_length=3, max_length=3)
     value_date: date
     execution_timestamp: datetime
-    business_function_code: str
-    type_subtype_code: str = "1000"
-    originator_to_beneficiary: Optional[str] = None
+    business_function_code: str = Field(..., min_length=3, max_length=3)
+    type_subtype_code: str = Field(default="1000", min_length=4, max_length=4)
+    originator_to_beneficiary: Optional[str] = Field(default=None, max_length=140)
     domestic_rail: DomesticRail = DomesticRail.FEDWIRE
     wire_network: WireNetwork = WireNetwork.FEDWIRE_MSG
 
 
 # raw SWIFT MT103 event for international wires
 class RawSWIFTEvent(BaseModel):
-    uetr: str
-    message_type: str = "MT103"
-    sender_bic: str
-    sender_country: str
-    receiver_bic: str
-    receiver_country: str
-    ordering_customer_account: str
-    ordering_customer_name: str
-    ordering_customer_address: Optional[str] = None
-    beneficiary_account: str
-    beneficiary_name: str
-    beneficiary_address: Optional[str] = None
-    instructed_amount: int
-    currency: str
+    uetr: str = Field(..., min_length=36, max_length=36)
+    message_type: str = Field(default="MT103", min_length=5, max_length=5)
+    sender_bic: str = Field(..., min_length=8, max_length=11)
+    sender_country: str = Field(..., min_length=2, max_length=2)
+    receiver_bic: str = Field(..., min_length=8, max_length=11)
+    receiver_country: str = Field(..., min_length=2, max_length=2)
+    ordering_customer_account: str = Field(..., min_length=1, max_length=34)
+    ordering_customer_name: str = Field(..., min_length=1, max_length=35)
+    ordering_customer_address: Optional[str] = Field(default=None, max_length=140)
+    beneficiary_account: str = Field(..., min_length=1, max_length=34)
+    beneficiary_name: str = Field(..., min_length=1, max_length=35)
+    beneficiary_address: Optional[str] = Field(default=None, max_length=140)
+    instructed_amount: int = Field(..., gt=0)
+    currency: str = Field(..., min_length=3, max_length=3)
     value_date: date
     execution_timestamp: datetime
-    correspondent_banks: List[CorrespondentHop] = []
-    purpose_code: Optional[str] = None
-    charge_type: str = "SHA"
+    correspondent_banks: List[CorrespondentHop] = Field(default_factory=list)
+    purpose_code: Optional[str] = Field(default=None, max_length=4)
+    charge_type: str = Field(default="SHA", min_length=3, max_length=3)
     wire_network: WireNetwork = WireNetwork.SWIFT
-    gpi_tracking_id: Optional[str] = None
+    gpi_tracking_id: Optional[str] = Field(default=None, min_length=36, max_length=36)
 
 
 # normalized wire event after enrichment from raw payload
 class NormalizedWireEvent(BaseModel):
     event_id: str = Field(default_factory=lambda: str(uuid.uuid4()))
-    source_message_id: str
-    sender_id: str
-    receiver_id: str
-    sender_bank_id: str
-    receiver_bank_id: str
-    correspondent_chain: List[str] = []
-    amount: int
-    currency: str
-    amount_usd: Optional[int] = None
+    source_message_id: str = Field(..., min_length=1, max_length=36)
+    sender_id: str = Field(..., min_length=1, max_length=256)
+    receiver_id: str = Field(..., min_length=1, max_length=256)
+    sender_bank_id: str = Field(..., min_length=1, max_length=64)
+    receiver_bank_id: str = Field(..., min_length=1, max_length=64)
+    correspondent_chain: List[str] = Field(default_factory=list)
+    amount: int = Field(..., gt=0)
+    currency: str = Field(..., min_length=3, max_length=3)
+    amount_usd: Optional[int] = Field(default=None, gt=0)
     timestamp: datetime
     value_date: date
     rail: Rail = Rail.WIRE
