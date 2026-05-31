@@ -62,7 +62,7 @@ class BasePaymentEvent(BaseModel):
     # the original untouched payload
     raw_payload: dict[str, Any] = Field(default_factor=dict)
 
-    @field_validator("timestamp_utc", node="before")
+    @field_validator("timestamp_utc", mode="before")
     @classmethod
     def enforcu_utc(cls, v: Any) -> datetime:
         # only have UTC no native times
