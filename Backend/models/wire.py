@@ -94,7 +94,7 @@ class RawFedwireEvent(BaseModel):
     sender_account: str = Field(..., min_length=1, max_length=34)
     sender_name: str = Field(..., min_length=1, max_length=35)
     sender_state: Optional[str] = Field(default=None, min_length=2, max_length=2)
-    receiver_aba: str = Field(..., min_length=9, max_length=9)
+    receiver_aba: str = Field(..., min_length=9, max_length=9, pattern=r"^\d{9}$")
     receiver_account: str = Field(..., min_length=1, max_length=34)
     receiver_name: str = Field(..., min_length=1, max_length=35)
     receiver_state: Optional[str] = Field(default=None, min_length=2, max_length=2)
