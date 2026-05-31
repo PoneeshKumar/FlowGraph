@@ -6,16 +6,20 @@ function MetricCard({ label, value, format, delta, accentColor, delay }) {
 
   useEffect(() => {
     let start = null
+    let frame = null
     const duration = 1000
     const step = (ts) => {
       if (!start) start = ts
       const p = Math.min((ts - start) / duration, 1)
       const ease = 1 - Math.pow(1 - p, 3)
       setDisplayed(Math.round(ease * value))
-      if (p < 1) requestAnimationFrame(step)
+      if (p < 1) frame = requestAnimationFrame(step)
     }
-    const timer = setTimeout(() => requestAnimationFrame(step), delay)
-    return () => clearTimeout(timer)
+    const timer = setTimeout(() => { frame = requestAnimationFrame(step) }, delay)
+    return () => {
+      clearTimeout(timer)
+      if (frame !== null) cancelAnimationFrame(frame)
+    }
   }, [value, delay])
 
   const formatted = format === 'currency'
