@@ -25,7 +25,9 @@ class SECCode(str, Enum):
 
 # a hashed account number helper
 def hash_account_number(account_number: str, routing_number: str) -> str:
-    combined = account_number + routing_number
+    clean_account = account_number.replace(" ", "").replace("-", "")
+    clean_routing = routing_number.replace(" ", "").replace("-", "")
+    combined = f"{clean_account}:{clean_routing}"
     return hashlib.sha256(combined.encode()).hexdigest()
 
 
