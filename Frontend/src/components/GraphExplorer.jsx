@@ -62,24 +62,23 @@ function GraphEdge({ edge, fromNode, toNode, isActive }) {
       <line
         x1={fromNode.x} y1={fromNode.y}
         x2={x2} y2={y2}
-        stroke={edge.isCycle ? '#C8241A' : '#CBD5E0'}
         strokeWidth={edge.isCycle ? width + 0.4 : width}
         opacity={edge.isCycle ? 0.7 : 0.5}
         strokeDasharray={edge.isCycle ? '5 5' : 'none'}
         markerEnd={`url(#arrow-${edge.isCycle ? 'cycle' : fromNode.risk})`}
+        style={{ stroke: edge.isCycle ? '#C8241A' : 'var(--border-strong)' }}
       />
       {/* Animated flow overlay — only when active */}
       {isActive && (
         <line
           x1={fromNode.x} y1={fromNode.y}
           x2={x2} y2={y2}
-          stroke={edge.isCycle ? '#C8241A' : '#0C7A5A'}
           strokeWidth={width + 0.6}
           opacity={edge.isCycle ? 0.85 : 0.55}
           strokeDasharray={edge.isCycle ? '8 10' : '5 12'}
           strokeLinecap="round"
           markerEnd={`url(#arrow-${edge.isCycle ? 'cycle' : 'low'})`}
-          style={{ animation: `flowDash ${dur}s linear infinite` }}
+          style={{ stroke: edge.isCycle ? '#C8241A' : 'var(--accent)', animation: `flowDash ${dur}s linear infinite` }}
         />
       )}
     </g>
@@ -102,15 +101,15 @@ function GraphNode({ node, isSelected, onSelect, delay }) {
         <circle r={r + 5} fill="none" stroke={color} strokeWidth="1.5" opacity="0.4"/>
       )}
 
-      {/* Node body — light fill, colored border (no glow) */}
+      {/* Node body — themed fill, colored border */}
       <circle
         r={r}
-        fill={isSelected ? bg : 'white'}
         stroke={color}
         strokeWidth={isSelected ? 2 : 1.5}
         style={{
+          fill: isSelected ? `var(--risk-${node.risk}-bg)` : 'var(--bg-card)',
           transition: 'all 0.18s ease',
-          filter: 'drop-shadow(0 1px 3px rgba(15,28,46,0.08))',
+          filter: 'drop-shadow(0 1px 3px rgba(0,0,0,0.10))',
           animation: `nodePop 0.35s ease ${delay}ms both`,
         }}
       />
@@ -122,11 +121,10 @@ function GraphNode({ node, isSelected, onSelect, delay }) {
       <text
         y={r + 12}
         textAnchor="middle"
-        fill={isSelected ? color : '#8A95A3'}
         fontSize={isSelected ? 9.5 : 9}
         fontFamily="Space Mono, monospace"
         fontWeight={isSelected ? 700 : 400}
-        style={{ userSelect: 'none', transition: 'all 0.15s' }}
+        style={{ fill: isSelected ? color : 'var(--text-muted)', userSelect: 'none', transition: 'all 0.15s' }}
       >
         {node.label}
       </text>
@@ -168,7 +166,7 @@ function NodePanel({ node, onClose }) {
         <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
           <span style={{
             fontSize: 10, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.06em',
-            color, background: RISK_BG[node.risk],
+            color, background: `var(--risk-${node.risk}-bg)`,
             border: `1px solid ${color}40`,
             padding: '3px 8px', borderRadius: 4,
           }}>
@@ -371,7 +369,7 @@ export default function GraphExplorer() {
       <div
         style={{
           flex: 1, position: 'relative', overflow: 'hidden',
-          background: '#F9FAFB',
+          background: 'var(--bg-base)',
           cursor: isPanning ? 'grabbing' : 'grab',
         }}
         onWheel={handleWheel}
@@ -383,7 +381,7 @@ export default function GraphExplorer() {
         {/* Subtle dot grid */}
         <div style={{
           position: 'absolute', inset: 0, pointerEvents: 'none',
-          backgroundImage: 'radial-gradient(circle, #CBD5E0 1px, transparent 1px)',
+          backgroundImage: 'radial-gradient(circle, var(--border-strong) 1px, transparent 1px)',
           backgroundSize: '28px 28px',
           opacity: 0.5,
         }} />

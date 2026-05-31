@@ -7,33 +7,33 @@
 }
 
 :root {
-  /* ── Backgrounds ── */
-  --bg-base:    #F4F6F9;
+  /* ── Backgrounds (warm) ── */
+  --bg-base:    #F5F2EC;
   --bg-surface: #FFFFFF;
   --bg-card:    #FFFFFF;
-  --bg-hover:   #F0F3F7;
-  --bg-subtle:  #F8FAFB;
+  --bg-hover:   #EDE8E0;
+  --bg-subtle:  #F8F5EF;
 
-  /* ── Sidebar (dark) ── */
-  --sidebar-bg:       #0F1C2E;
-  --sidebar-surface:  #162235;
-  --sidebar-border:   rgba(255, 255, 255, 0.07);
-  --sidebar-text:     rgba(255, 255, 255, 0.55);
-  --sidebar-text-hi:  rgba(255, 255, 255, 0.90);
-  --sidebar-active-bg: rgba(12, 122, 90, 0.18);
-  --sidebar-accent:   #1DB887;
+  /* ── Sidebar (always dark charcoal) ── */
+  --sidebar-bg:        #0F1C2E;
+  --sidebar-surface:   #162235;
+  --sidebar-border:    rgba(255, 255, 255, 0.07);
+  --sidebar-text:      rgba(255, 255, 255, 0.55);
+  --sidebar-text-hi:   rgba(255, 255, 255, 0.90);
+  --sidebar-active-bg: rgba(58, 125, 101, 0.18);
+  --sidebar-accent:    #6AAFA0;
 
-  /* ── Borders ── */
-  --border:        #E4E9F0;
-  --border-strong: #C8D0DC;
+  /* ── Borders (warm) ── */
+  --border:        #E3DDD4;
+  --border-strong: #C9BFB3;
 
-  /* ── Brand accent — deep teal-green ── */
-  --accent:      #0C7A5A;
-  --accent-mid:  #0E9469;
-  --accent-bg:   #EAF5F1;
-  --accent-border: #B2D9CE;
+  /* ── Brand accent — washed sage-green ── */
+  --accent:        #3A7D65;
+  --accent-mid:    #4E9A80;
+  --accent-bg:     #EDF2EF;
+  --accent-border: #BCCEC8;
 
-  /* ── Risk colors (muted, readable on white) ── */
+  /* ── Risk colors ── */
   --risk-critical:        #C8241A;
   --risk-critical-bg:     #FEF0EF;
   --risk-critical-border: #F5C0BC;
@@ -46,21 +46,21 @@
   --risk-medium-bg:     #FEFAE7;
   --risk-medium-border: #EFD98A;
 
-  --risk-low:        #0C7A5A;
-  --risk-low-bg:     #EAF5F1;
-  --risk-low-border: #B2D9CE;
+  --risk-low:        #3A7D65;
+  --risk-low-bg:     #EDF2EF;
+  --risk-low-border: #BCCEC8;
 
   /* ── Status colors ── */
   --status-flagged:   #C8241A;
   --status-frozen:    #B45309;
   --status-reviewing: #92620A;
-  --status-cleared:   #0C7A5A;
+  --status-cleared:   #3A7D65;
 
   /* ── Text ── */
-  --text-primary:   #0F1C2E;
-  --text-secondary: #4A5568;
-  --text-muted:     #8A95A3;
-  --text-faint:     #B8C0CC;
+  --text-primary:   #1A1410;
+  --text-secondary: #4D4438;
+  --text-muted:     #8A7E74;
+  --text-faint:     #BDB5AB;
 
   /* ── Fonts ── */
   --font-display: 'Instrument Sans', sans-serif;
@@ -73,9 +73,9 @@
   --radius-lg: 12px;
 
   /* ── Shadows ── */
-  --shadow-sm:  0 1px 3px rgba(15, 28, 46, 0.06), 0 1px 2px rgba(15, 28, 46, 0.04);
-  --shadow-md:  0 4px 12px rgba(15, 28, 46, 0.08), 0 2px 4px rgba(15, 28, 46, 0.04);
-  --shadow-lg:  0 8px 24px rgba(15, 28, 46, 0.10), 0 4px 8px rgba(15, 28, 46, 0.06);
+  --shadow-sm:  0 1px 3px rgba(26, 20, 16, 0.07), 0 1px 2px rgba(26, 20, 16, 0.05);
+  --shadow-md:  0 4px 12px rgba(26, 20, 16, 0.09), 0 2px 4px rgba(26, 20, 16, 0.05);
+  --shadow-lg:  0 8px 24px rgba(26, 20, 16, 0.11), 0 4px 8px rgba(26, 20, 16, 0.07);
 
   --sidebar-w: 228px;
 
@@ -85,6 +85,56 @@
   background: var(--bg-base);
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
+}
+
+/* ── Dark mode ── */
+[data-theme="dark"] {
+  --bg-base:    #161310;
+  --bg-surface: #1E1B17;
+  --bg-card:    #231F1B;
+  --bg-hover:   #2C2822;
+  --bg-subtle:  #1B1814;
+
+  --border:        #332E28;
+  --border-strong: #453E37;
+
+  --accent:        #5AA98E;
+  --accent-mid:    #72BCA4;
+  --accent-bg:     #0E1E18;
+  --accent-border: #1E3D30;
+
+  --risk-critical:        #D85149;
+  --risk-critical-bg:     #201210;
+  --risk-critical-border: #4A2220;
+
+  --risk-high:        #C9712A;
+  --risk-high-bg:     #201610;
+  --risk-high-border: #47300A;
+
+  --risk-medium:        #B08A2C;
+  --risk-medium-bg:     #1E1A0C;
+  --risk-medium-border: #42360E;
+
+  --risk-low:        #5AA98E;
+  --risk-low-bg:     #0E1E18;
+  --risk-low-border: #1E3D30;
+
+  --status-flagged:   #D85149;
+  --status-frozen:    #C9712A;
+  --status-reviewing: #B08A2C;
+  --status-cleared:   #5AA98E;
+
+  --text-primary:   #EDE5D8;
+  --text-secondary: #AFA196;
+  --text-muted:     #72655C;
+  --text-faint:     #4D4540;
+
+  --shadow-sm:  0 1px 3px rgba(0, 0, 0, 0.25), 0 1px 2px rgba(0, 0, 0, 0.18);
+  --shadow-md:  0 4px 12px rgba(0, 0, 0, 0.32), 0 2px 4px rgba(0, 0, 0, 0.20);
+  --shadow-lg:  0 8px 24px rgba(0, 0, 0, 0.40), 0 4px 8px rgba(0, 0, 0, 0.25);
+
+  color: var(--text-primary);
+  background: var(--bg-base);
 }
 
 body {

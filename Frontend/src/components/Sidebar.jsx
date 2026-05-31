@@ -52,7 +52,30 @@ function TxnIcon() {
   )
 }
 
-export default function Sidebar({ active, onNav }) {
+function SunIcon() {
+  return (
+    <svg width="13" height="13" viewBox="0 0 13 13" fill="none">
+      <circle cx="6.5" cy="6.5" r="2.5" fill="currentColor"/>
+      <line x1="6.5" y1="0.5" x2="6.5" y2="2.5"   stroke="currentColor" strokeWidth="1.3" strokeLinecap="round"/>
+      <line x1="6.5" y1="10.5" x2="6.5" y2="12.5" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round"/>
+      <line x1="0.5" y1="6.5" x2="2.5" y2="6.5"   stroke="currentColor" strokeWidth="1.3" strokeLinecap="round"/>
+      <line x1="10.5" y1="6.5" x2="12.5" y2="6.5" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round"/>
+      <line x1="2.3" y1="2.3" x2="3.7" y2="3.7"   stroke="currentColor" strokeWidth="1.3" strokeLinecap="round"/>
+      <line x1="9.3" y1="9.3" x2="10.7" y2="10.7" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round"/>
+      <line x1="9.3" y1="2.3" x2="10.7" y2="3.7"  stroke="currentColor" strokeWidth="1.3" strokeLinecap="round"/>
+      <line x1="2.3" y1="9.3" x2="3.7" y2="10.7"  stroke="currentColor" strokeWidth="1.3" strokeLinecap="round"/>
+    </svg>
+  )
+}
+function MoonIcon() {
+  return (
+    <svg width="13" height="13" viewBox="0 0 13 13" fill="none">
+      <path d="M10.5 7.5A5 5 0 015.5 2.5a5 5 0 100 8 5 5 0 005-3z" fill="currentColor"/>
+    </svg>
+  )
+}
+
+export default function Sidebar({ active, onNav, theme, onToggleTheme }) {
   const [hoverId, setHoverId] = useState(null)
 
   return (
@@ -197,10 +220,35 @@ export default function Sidebar({ active, onNav }) {
         })}
       </nav>
 
+      {/* Theme toggle */}
+      <div style={{ padding: '0 10px 8px' }}>
+        <button
+          onClick={onToggleTheme}
+          style={{
+            width: '100%',
+            display: 'flex', alignItems: 'center', gap: 9,
+            padding: '7px 10px',
+            borderRadius: 'var(--radius-sm)',
+            color: 'rgba(255,255,255,0.40)',
+            background: 'transparent',
+            transition: 'all 0.13s ease',
+            fontSize: 12,
+          }}
+          onMouseEnter={e => { e.currentTarget.style.color = 'rgba(255,255,255,0.70)'; e.currentTarget.style.background = 'rgba(255,255,255,0.05)' }}
+          onMouseLeave={e => { e.currentTarget.style.color = 'rgba(255,255,255,0.40)'; e.currentTarget.style.background = 'transparent' }}
+        >
+          {theme === 'light' ? <MoonIcon /> : <SunIcon />}
+          <span style={{ letterSpacing: '-0.1px' }}>
+            {theme === 'light' ? 'Dark mode' : 'Light mode'}
+          </span>
+        </button>
+      </div>
+
       {/* Network status */}
       <div style={{
-        padding: '14px 16px',
+        padding: '0 16px 14px',
         borderTop: '1px solid var(--sidebar-border)',
+        paddingTop: 14,
         margin: '0 0 0 0',
       }}>
         <div style={{
