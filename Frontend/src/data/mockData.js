@@ -109,3 +109,85 @@ export const METRICS = {
   cyclesDetected:{ value: 3,        delta: +200  },
   riskAlerts:    { value: 17,       delta: +42.9 },
 }
+
+// ── In-Flight: ACH Batches ──────────────────────────────────────────────────
+export const ACH_BATCHES = [
+  {
+    id: 'BATCH-20240530-001',
+    filename: 'NACHA-20240530-001.ach',
+    txnCount: 412,
+    totalAmount: 2340000,
+    returnCount: 0,
+    submittedAt: '09:02 AM',
+    status: 'processing',
+    risk: 'medium',
+    transactions: [
+      { id: 'ACH-00412', from: 'BNK-1102', to: 'ACC-7741', amount: 38000,  returnCode: null,  risk: 'medium', status: 'processing' },
+      { id: 'ACH-00411', from: 'ACC-8832', to: 'ACC-7741', amount: 138000, returnCode: null,  risk: 'low',    status: 'processing' },
+      { id: 'ACH-00410', from: 'MRC-5503', to: 'ACC-9980', amount: 48000,  returnCode: null,  risk: 'low',    status: 'processing' },
+      { id: 'ACH-00409', from: 'ACC-2291', to: 'ACC-6612', amount: 85000,  returnCode: null,  risk: 'high',   status: 'processing' },
+      { id: 'ACH-00408', from: 'ACC-3357', to: 'ACC-6612', amount: 65000,  returnCode: null,  risk: 'high',   status: 'processing' },
+    ],
+  },
+  {
+    id: 'BATCH-20240530-002',
+    filename: 'NACHA-20240530-002.ach',
+    txnCount: 188,
+    totalAmount: 940000,
+    returnCount: 7,
+    submittedAt: '11:45 AM',
+    status: 'partially_returned',
+    risk: 'high',
+    transactions: [
+      { id: 'ACH-00390', from: 'EXC-9017', to: 'ACC-4471', amount: 130000, returnCode: 'R07', risk: 'high',     status: 'returned' },
+      { id: 'ACH-00389', from: 'ACC-1129', to: 'MRC-8814', amount: 42000,  returnCode: 'R01', risk: 'medium',   status: 'returned' },
+      { id: 'ACH-00388', from: 'BNK-3301', to: 'EXC-0044', amount: 75000,  returnCode: null,  risk: 'critical', status: 'processing' },
+      { id: 'ACH-00387', from: 'ACC-9980', to: 'ACC-4471', amount: 95000,  returnCode: null,  risk: 'medium',   status: 'processing' },
+    ],
+  },
+  {
+    id: 'BATCH-20240530-003',
+    filename: 'NACHA-20240530-003.ach',
+    txnCount: 64,
+    totalAmount: 310000,
+    returnCount: 0,
+    submittedAt: '01:18 PM',
+    status: 'submitted',
+    risk: 'low',
+    transactions: [
+      { id: 'ACH-00372', from: 'MRC-8814', to: 'ACC-1129', amount: 21000, returnCode: null, risk: 'low', status: 'submitted' },
+      { id: 'ACH-00371', from: 'BNK-1102', to: 'ACC-8832', amount: 54000, returnCode: null, risk: 'low', status: 'submitted' },
+    ],
+  },
+]
+
+// ── In-Flight: Wire Transactions ────────────────────────────────────────────
+export const WIRE_INFLIGHT = [
+  { id: 'WIR-44821', from: 'ACC-4471', to: 'EXC-0044', amount: 420000, currency: 'USD', submittedAt: '14:31', ageMin: 12,  risk: 'critical', status: 'pending', swift: 'CHASUS33' },
+  { id: 'WIR-44819', from: 'ACC-6612', to: 'ACC-4471', amount: 610000, currency: 'USD', submittedAt: '14:29', ageMin: 14,  risk: 'critical', status: 'pending', swift: 'BOFAUS3N' },
+  { id: 'WIR-44815', from: 'EXC-0044', to: 'BNK-3301', amount: 220000, currency: 'USD', submittedAt: '14:27', ageMin: 16,  risk: 'high',     status: 'pending', swift: 'CITIUS33' },
+  { id: 'WIR-44801', from: 'ACC-7741', to: 'ACC-4471', amount: 280000, currency: 'USD', submittedAt: '13:55', ageMin: 48,  risk: 'high',     status: 'pending', swift: 'WFBIUS6S' },
+  { id: 'WIR-44788', from: 'BNK-1102', to: 'EXC-9017', amount: 95000,  currency: 'USD', submittedAt: '12:10', ageMin: 113, risk: 'medium',   status: 'delayed', swift: 'CHASUS33' },
+]
+
+// ── In-Flight: Card Authorizations ──────────────────────────────────────────
+// ageMin = minutes since authorization
+export const CARD_AUTHS = [
+  { id: 'AUTH-77421', merchant: 'MRC-5503', account: 'ACC-8832', amount: 1240,  currency: 'USD', ageMin: 4,   network: 'Visa',       status: 'authorized', risk: 'low'    },
+  { id: 'AUTH-77418', merchant: 'MRC-8814', account: 'ACC-1129', amount: 8800,  currency: 'USD', ageMin: 11,  network: 'Mastercard', status: 'authorized', risk: 'low'    },
+  { id: 'AUTH-77410', merchant: 'MRC-5503', account: 'ACC-9980', amount: 3400,  currency: 'USD', ageMin: 28,  network: 'Visa',       status: 'authorized', risk: 'medium' },
+  { id: 'AUTH-77401', merchant: 'MRC-8814', account: 'ACC-4471', amount: 12000, currency: 'USD', ageMin: 74,  network: 'Visa',       status: 'authorized', risk: 'high'   },
+  { id: 'AUTH-77388', merchant: 'MRC-5503', account: 'ACC-2291', amount: 9750,  currency: 'USD', ageMin: 142, network: 'Mastercard', status: 'stale',      risk: 'high'   },
+  { id: 'AUTH-77371', merchant: 'MRC-8814', account: 'ACC-3357', amount: 4200,  currency: 'USD', ageMin: 310, network: 'Visa',       status: 'stale',      risk: 'critical'},
+]
+
+export const ACH_RETURN_CODES = {
+  R01: 'Insufficient Funds',
+  R02: 'Account Closed',
+  R03: 'No Account / Unable to Locate',
+  R04: 'Invalid Account Number',
+  R07: 'Authorization Revoked',
+  R10: 'Customer Advises Unauthorized',
+  R16: 'Account Frozen',
+  R29: 'Corporate Customer Advises Not Authorized',
+}
