@@ -8,6 +8,7 @@ from enum import Enum
 from typing import Any, Optional
 
 from pydantic import Field, field_validator
+from models.wire_events import hash_account_number
 
 from models.card_events import BasePaymentEvent, EventStatus, EventType, Rail
 
@@ -33,7 +34,7 @@ def hash_account_number(account_number: str, routing_number: str) -> str:
 
 class BaseACHEvent(BasePaymentEvent):
     rail: Rail = Field(default=Rail.ACH)
-    event_type: EventType = Field(default=EventType.SETTLEMENT)
+    event_type: EventType = Field(default=EventType.PENDING)
 
     ach_event_type: ACHEventType
 
@@ -51,7 +52,8 @@ class BaseACHEvent(BasePaymentEvent):
     rdfi_routing: str = Field(..., min_length=9, max_length=9)
 
     sec_code: SECCode
-
+    sender_account_hash:   str = Field(..., min_length=64, max_length=64)
+    receiver_account_hash: str = Field(..., min_length=64, max_length=64)
     # when to expect settlement
     expected_settlement_date: date | None = Field(default=None)
 
