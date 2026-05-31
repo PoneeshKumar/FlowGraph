@@ -1,0 +1,102 @@
+services:
+
+  # ---------------------------------------------------------------------------
+  # Kafka (KRaft mode — no Zookeeper)
+  # ---------------------------------------------------------------------------
+  kafka:
+    image: bitnami/kafka:3.7
+    container_name: flowgraph-kafka
+    ports:
+      - "9092:9092"    # host access (Faust app running locally connects here)
+      - "29092:29092"  # inter-container access (other services inside Docker)
+    environment:
+      # KRaft identity
+      KAFKA_CFG_NODE_ID: 1
+      KAFKA_CFG_PROCESS_ROLES: broker,controller
+      KAFKA_CFG_CONTROLLER_QUORUM_VOTERS: 1@kafka:9093
+      KAFKA_KRAFT_CLUSTER_ID: "flowgraph-local-cluster-001"
+
+      # Two listener pairs:
+      #   EXTERNAL → host reaches Kafka at localhost:9092
+      #   INTERNAL → containers reach Kafka at kafka:29092
+      KAFKA_CFG_LISTENERS: EXTERNAL://0.0.0.0:9092,INTERNAL://0.0.0.0:29092,CONTROLLER://0.0.0.0:9093
+      KAFKA_CFG_ADVERTISED_LISTENERS: EXTERNAL://localhost:9092,INTERNAL://kafka:29092
+      KAFKA_CFG_LISTENER_SECURITY_PROTOCOL_MAP: EXTERNAL:PLAINTEXT,INTERNAL:PLAINTEXT,CONTROLLER:PLAINTEXT
+      KAFKA_CFG_INTER_BROKER_LISTENER_NAME: INTERNAL
+      KAFKA_CFG_CONTROLLER_LISTENER_NAMES: CONTROLLER
+
+      # Topic defaults
+      # 6 partitions: enough headroom for card_id, account_id, sender_id, wallet_addr spread
+      KAFKA_CFG_NUM_PARTITIONS: 6
+      KAFKA_CFG_DEFAULT_REPLICATION_FACTOR: 1   # single broker — raise to 3 in prod
+      KAFKA_CFG_AUTO_CREATE_TOPICS_ENABLE: "true"
+      KAFKA_CFG_LOG_RETENTION_HOURS: 168         # 7 days
+
+    volumes:
+      - kafka_data:/bitnami/kafka
+    healthcheck:
+      test: ["CMD-SHELL", "kafka-topics.sh --bootstrap-server localhost:9092 --list"]
+      interval: 15s
+      timeout: 10s
+      retries: 5
+      start_period: 20s
+
+  # ---------------------------------------------------------------------------
+  # Neo4j — graph relationships (fill in schema config when we get here)
+  # ---------------------------------------------------------------------------
+  neo4j:
+    image: neo4j:5
+    container_name: flowgraph-neo4j
+    ports:
+      - "7474:7474"  # browser UI
+      - "7687:7687"  # bolt protocol
+    environment:
+      NEO4J_AUTH: ${NEO4J_USER:-neo4j}/${NEO4J_PASSWORD:-changeme}
+    volumes:
+      - neo4j_data:/data
+
+  # ---------------------------------------------------------------------------
+  # Redis — auth lookup cache (fill in persistence/eviction config when we get here)
+  # ---------------------------------------------------------------------------
+  redis:
+    image: redis:7-alpine
+    container_name: flowgraph-redis
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+
+  # ---------------------------------------------------------------------------
+  # PostgreSQL — persistent storage (fill in init scripts when we get here)
+  # ---------------------------------------------------------------------------
+  postgres:
+    image: postgres:16
+    container_name: flowgraph-postgres
+    ports:
+      - "5432:5432"
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-flowgraph}
+      POSTGRES_USER: ${POSTGRES_USER:-flowgraph}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-changeme}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+
+  # ---------------------------------------------------------------------------
+  # pgAdmin — Postgres UI for the team
+  # ---------------------------------------------------------------------------
+  pgadmin:
+    image: dpage/pgadmin4
+    container_name: flowgraph-pgadmin
+    ports:
+      - "5050:80"
+    environment:
+      PGADMIN_DEFAULT_EMAIL: ${PGADMIN_EMAIL:-admin@flowgraph.local}
+      PGADMIN_DEFAULT_PASSWORD: ${PGADMIN_PASSWORD:-changeme}
+    depends_on:
+      - postgres
+
+volumes:
+  kafka_data:
+  neo4j_data:
+  redis_data:
+  postgres_data:
