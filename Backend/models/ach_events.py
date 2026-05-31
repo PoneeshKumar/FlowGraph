@@ -8,7 +8,6 @@ from enum import Enum
 from typing import Any, Optional
 
 from pydantic import Field, field_validator
-from models.wire_events import hash_account_number
 
 from models.card_events import BasePaymentEvent, EventStatus, EventType, Rail
 
