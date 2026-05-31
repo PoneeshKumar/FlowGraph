@@ -1,6 +1,6 @@
 # this file will have to do with the ach transactions using pydantic models
 
-# neccesssary imports
+# necessary imports
 
 import hashlib
 from datetime import datetime
