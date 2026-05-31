@@ -272,17 +272,25 @@ export default function GraphExplorer() {
   const svgRef = useRef(null)
 
   useEffect(() => {
+    const timeoutIds = new Set()
     const iv = setInterval(() => {
       const ids = GRAPH_EDGES.map(e => e.id)
       const id = ids[Math.floor(Math.random() * ids.length)]
       setActiveEdges(prev => {
         const next = new Set(prev)
         next.add(id)
-        setTimeout(() => setActiveEdges(s => { const n = new Set(s); n.delete(id); return n }), 2200)
         return next
       })
+      const timeoutId = setTimeout(() => {
+        setActiveEdges(s => { const n = new Set(s); n.delete(id); return n })
+        timeoutIds.delete(timeoutId)
+      }, 2200)
+      timeoutIds.add(timeoutId)
     }, 700)
-    return () => clearInterval(iv)
+    return () => {
+      clearInterval(iv)
+      timeoutIds.forEach(clearTimeout)
+    }
   }, [])
 
   const handleWheel = useCallback((e) => {
