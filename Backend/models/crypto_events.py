@@ -1,3 +1,6 @@
+# this file will have events for crypto transactions using pydantic models
+
+# neccessary imports
 import re
 from datetime import datetime
 from enum import Enum
@@ -7,8 +10,7 @@ from pydantic import Field, field_validator, model_validator
 
 from models.card_events import BasePaymentEvent, EventStatus, EventType, Rail
 
-# --- Enums ---
-
+# enums that are needed
 class ChainType(str, Enum):
     BITCOIN = "BITCOIN"
     ETHEREUM = "ETHEREUM"
@@ -20,14 +22,12 @@ class CryptoTxStatus(str, Enum):
     FAILED = "FAILED"        # transaction dropped or reverted
 
 
-# --- Constants ---
-
+# constants according to how bitcoin and etherium work
 BTC_CONFIRMATIONS_REQUIRED = 6
 ETH_CONFIRMATIONS_REQUIRED = 12
 
 
-# --- Address validation helper ---
-
+# helper to check to validate adresss
 def validate_wallet_address(address: str, chain: ChainType) -> bool:
     """Return True if address is a valid wallet address for the given chain.
 
@@ -45,8 +45,7 @@ def validate_wallet_address(address: str, chain: ChainType) -> bool:
     return False
 
 
-# --- Model ---
-
+# actual crypto model
 class CryptoEvent(BasePaymentEvent):
     """Single model for Bitcoin and Ethereum on-chain transactions.
 
@@ -112,7 +111,6 @@ class CryptoEvent(BasePaymentEvent):
 
         return self
 
-    # --- Properties ---
 
     @property
     def tx_reference(self) -> str:
@@ -138,7 +136,7 @@ class CryptoEvent(BasePaymentEvent):
             return self.amount_cents / 100_000_000  # satoshis → BTC
         return self.amount_cents / 10**18           # wei → ETH
 
-    # --- Lifecycle mapping ---
+   # map the lifecycle of the crypto transaction
 
     def __init__(self, **data: Any) -> None:
         if "status" not in data:
