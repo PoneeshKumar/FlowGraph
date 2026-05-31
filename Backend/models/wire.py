@@ -1,5 +1,5 @@
-# models/wire_extended.py
-from pydantic import BaseModel, Field, field_validator
+# Backend/models/wire.py
+from pydantic import BaseModel, Field
 from enum import Enum
 from typing import Optional, List
 from datetime import datetime, date
@@ -52,7 +52,7 @@ class JurisdictionRiskTier(str, Enum):
 class GeoRiskProfile(BaseModel):
     sender_country: str
     receiver_country: str
-    correspondent_countries: List[str] = []
+    correspondent_countries: List[str] = Field(default_factory=list)
     sender_risk_tier: JurisdictionRiskTier
     receiver_risk_tier: JurisdictionRiskTier
     max_chain_risk_tier: JurisdictionRiskTier
@@ -127,7 +127,7 @@ class RawSWIFTEvent(BaseModel):
     currency: str
     value_date: date
     execution_timestamp: datetime
-    correspondent_banks: List[CorrespondentHop] = []
+    correspondent_banks: List[CorrespondentHop] = Field(default_factory=list)
     purpose_code: Optional[str] = None
     charge_type: str = "SHA"
     wire_network: WireNetwork = WireNetwork.SWIFT
@@ -142,7 +142,7 @@ class NormalizedWireEvent(BaseModel):
     receiver_id: str
     sender_bank_id: str
     receiver_bank_id: str
-    correspondent_chain: List[str] = []
+    correspondent_chain: List[str] = Field(default_factory=list)
     amount: int
     currency: str
     amount_usd: Optional[int] = None
