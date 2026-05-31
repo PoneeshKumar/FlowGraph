@@ -90,7 +90,7 @@ class CorrespondentHop(BaseModel):
 class RawFedwireEvent(BaseModel):
     imad: str = Field(..., min_length=1, max_length=22)
     omad: Optional[str] = Field(default=None, max_length=22)
-    sender_aba: str = Field(..., min_length=9, max_length=9)
+    sender_aba: str = Field(..., min_length=9, max_length=9, pattern=r"^\d{9}$")
     sender_account: str = Field(..., min_length=1, max_length=34)
     sender_name: str = Field(..., min_length=1, max_length=35)
     sender_state: Optional[str] = Field(default=None, min_length=2, max_length=2)
