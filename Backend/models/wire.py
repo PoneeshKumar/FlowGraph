@@ -1,5 +1,5 @@
-# models/wire_extended.py
-from pydantic import BaseModel, Field, field_validator
+# Backend/models/wire.py
+from pydantic import BaseModel, Field
 from enum import Enum
 from typing import Optional, List
 from datetime import datetime, date
