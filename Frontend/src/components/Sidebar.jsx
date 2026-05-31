@@ -23,8 +23,8 @@ function GraphIcon() {
       <circle cx="7.5" cy="7.5" r="2.2" fill="currentColor"/>
       <circle cx="2"   cy="3.5" r="1.5" fill="currentColor" opacity=".65"/>
       <circle cx="13"  cy="3.5" r="1.5" fill="currentColor" opacity=".65"/>
-      <circle cx="2"   cy="11.5"r="1.5" fill="currentColor" opacity=".65"/>
-      <circle cx="13"  cy="11.5"r="1.5" fill="currentColor" opacity=".65"/>
+      <circle cx="2"   cy="11.5" r="1.5" fill="currentColor" opacity=".65"/>
+      <circle cx="13"  cy="11.5" r="1.5" fill="currentColor" opacity=".65"/>
       <line x1="3.4"  y1="4.5"  x2="5.9"  y2="6.6"  stroke="currentColor" strokeWidth="1" opacity=".45"/>
       <line x1="11.6" y1="4.5"  x2="9.1"  y2="6.6"  stroke="currentColor" strokeWidth="1" opacity=".45"/>
       <line x1="3.4"  y1="10.5" x2="5.9"  y2="8.4"  stroke="currentColor" strokeWidth="1" opacity=".45"/>
