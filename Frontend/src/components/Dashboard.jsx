@@ -304,7 +304,7 @@ export default function Dashboard({ onNav }) {
                 }}>17</span>
               </div>
               <button
-                onClick={() => {}}
+                onClick={() => onNav('alerts')}
                 style={{ fontSize: 11, color: 'var(--accent)', fontWeight: 500, background: 'none', border: 'none', cursor: 'pointer' }}
               >
                 View all →
