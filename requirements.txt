@@ -1,0 +1,18 @@
+# Kafka stream processing (compatible with Kafka 3.8)
+faust-streaming==0.11.3
+
+# Data validation and models
+pydantic==2.8.2
+
+# Configuration management
+python-dotenv==1.0.1
+
+# Database drivers
+neo4j==5.21.0
+redis==5.0.4
+
+# Async HTTP client (for Faust and async operations)
+aiohttp==3.10.1
+
+# Logging and utilities
+python-json-logger==2.0.7
