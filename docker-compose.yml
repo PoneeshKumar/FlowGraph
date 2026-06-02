@@ -4,36 +4,36 @@ services:
   # Kafka (KRaft mode — no Zookeeper)
   # ---------------------------------------------------------------------------
   kafka:
-    image: bitnami/kafka:3.7
+    image: apache/kafka:latest
     container_name: flowgraph-kafka
     ports:
       - "9092:9092"    # host access (Faust app running locally connects here)
       - "29092:29092"  # inter-container access (other services inside Docker)
     environment:
       # KRaft identity
-      KAFKA_CFG_NODE_ID: 1
-      KAFKA_CFG_PROCESS_ROLES: broker,controller
-      KAFKA_CFG_CONTROLLER_QUORUM_VOTERS: 1@kafka:9093
+      KAFKA_NODE_ID: 1
+      KAFKA_PROCESS_ROLES: broker,controller
+      KAFKA_CONTROLLER_QUORUM_VOTERS: 1@kafka:9093
       KAFKA_KRAFT_CLUSTER_ID: "flowgraph-local-cluster-001"
 
       # Two listener pairs:
       #   EXTERNAL → host reaches Kafka at localhost:9092
       #   INTERNAL → containers reach Kafka at kafka:29092
-      KAFKA_CFG_LISTENERS: EXTERNAL://0.0.0.0:9092,INTERNAL://0.0.0.0:29092,CONTROLLER://0.0.0.0:9093
-      KAFKA_CFG_ADVERTISED_LISTENERS: EXTERNAL://localhost:9092,INTERNAL://kafka:29092
-      KAFKA_CFG_LISTENER_SECURITY_PROTOCOL_MAP: EXTERNAL:PLAINTEXT,INTERNAL:PLAINTEXT,CONTROLLER:PLAINTEXT
-      KAFKA_CFG_INTER_BROKER_LISTENER_NAME: INTERNAL
-      KAFKA_CFG_CONTROLLER_LISTENER_NAMES: CONTROLLER
+      KAFKA_LISTENERS: EXTERNAL://0.0.0.0:9092,INTERNAL://0.0.0.0:29092,CONTROLLER://0.0.0.0:9093
+      KAFKA_ADVERTISED_LISTENERS: EXTERNAL://localhost:9092,INTERNAL://kafka:29092
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: EXTERNAL:PLAINTEXT,INTERNAL:PLAINTEXT,CONTROLLER:PLAINTEXT
+      KAFKA_INTER_BROKER_LISTENER_NAME: INTERNAL
+      KAFKA_CONTROLLER_LISTENER_NAMES: CONTROLLER
 
       # Topic defaults
       # 6 partitions: enough headroom for card_id, account_id, sender_id, wallet_addr spread
-      KAFKA_CFG_NUM_PARTITIONS: 6
-      KAFKA_CFG_DEFAULT_REPLICATION_FACTOR: 1   # single broker — raise to 3 in prod
-      KAFKA_CFG_AUTO_CREATE_TOPICS_ENABLE: "true"
-      KAFKA_CFG_LOG_RETENTION_HOURS: 168         # 7 days
+      KAFKA_NUM_PARTITIONS: 6
+      KAFKA_DEFAULT_REPLICATION_FACTOR: 1   # single broker — raise to 3 in prod
+      KAFKA_AUTO_CREATE_TOPICS_ENABLE: "true"
+      KAFKA_LOG_RETENTION_HOURS: 168         # 7 days
 
     volumes:
-      - kafka_data:/bitnami/kafka
+      - kafka_data:/var/lib/kafka/data
     healthcheck:
       test: ["CMD-SHELL", "kafka-topics.sh --bootstrap-server localhost:9092 --list"]
       interval: 15s
