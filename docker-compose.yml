@@ -29,7 +29,7 @@ services:
       # 6 partitions: enough headroom for card_id, account_id, sender_id, wallet_addr spread
       KAFKA_NUM_PARTITIONS: 6
       KAFKA_DEFAULT_REPLICATION_FACTOR: 1   # single broker — raise to 3 in prod
-      KAFKA_AUTO_CREATE_TOPICS_ENABLE: "true"
+      KAFKA_AUTO_CREATE_TOPICS_ENABLE: "false"
       KAFKA_LOG_RETENTION_HOURS: 168         # 7 days
 
     volumes:

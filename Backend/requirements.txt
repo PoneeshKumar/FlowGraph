@@ -1,0 +1,23 @@
+# Faust stream processing framework
+faust==1.10.4
+robinhood-aiokafka==1.1.6
+
+# Data validation and models
+pydantic==2.8.2
+
+# Configuration management
+python-dotenv==1.0.1
+
+# Database drivers
+neo4j==5.21.0
+redis==5.0.4
+
+# Web framework (included with Faust but explicit for clarity)
+aiohttp==3.10.1
+
+# Logging utilities
+python-json-logger==2.0.7
+
+# Note: psycopg2-binary omitted (requires PostgreSQL dev libs)
+# Install separately if needed: pip install psycopg2-binary
+# Or use: brew install postgresql

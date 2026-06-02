@@ -33,7 +33,7 @@ def hash_account_number(account_number: str, routing_number: str) -> str:
 
 class BaseACHEvent(BasePaymentEvent):
     rail: Rail = Field(default=Rail.ACH)
-    event_type: EventType = Field(default=EventType.PENDING)
+    event_type: EventType
 
     ach_event_type: ACHEventType
 
@@ -54,7 +54,7 @@ class BaseACHEvent(BasePaymentEvent):
     sender_account_hash:   str = Field(..., min_length=64, max_length=64)
     receiver_account_hash: str = Field(..., min_length=64, max_length=64)
     # when to expect settlement
-    expected_settlement_date: date | None = Field(default=None)
+    expected_settlement_date: Optional[date] = Field(default=None)
 
     # only populated when the transaction is returned
     return_code: Optional[str] = Field(default=None, min_length=3, max_length=3)

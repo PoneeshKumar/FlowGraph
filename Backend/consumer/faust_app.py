@@ -22,6 +22,7 @@ app = faust.App(
     "flowgraph",
     broker=KAFKA_BROKER,
     value_serializer="raw",
+    topic_allow_declare=False,
 )
 
 # Raw inbound topics — Faust assigns each agent its own consumer group automatically:
