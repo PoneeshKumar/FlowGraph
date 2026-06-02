@@ -56,6 +56,10 @@ class BasePaymentEvent(BaseModel):
     amount_cents: int=Field(..., gt=0)
     currency: str=Field(default="CAD", min_length=3, max_length=3)
 
+    # canonical USD value in minor units (cents) for cross-rail, cross-currency
+    # aggregation in the graph + cache. Populated at normalization time.
+    amount_usd_cents: int=Field(..., gt=0)
+
     # always have UTC time for timestamps
     timestamp_utc: datetime
 

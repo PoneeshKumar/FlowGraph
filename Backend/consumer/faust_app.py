@@ -12,6 +12,7 @@ from config import (
     TOPIC_WIRE_RAW,
 )
 from models.card_events import CardAuthEvent, CardSettlementEvent, EventType
+from fx import to_usd_cents
 
 logger = logging.getLogger(__name__)
 
@@ -41,6 +42,12 @@ async def process_card(stream):
     async for key, raw in stream.items():
         try:
             data = json.loads(raw)
+            # canonical USD is required on the base model — compute it before
+            # validation since raw card payloads don't carry it
+            data.setdefault(
+                "amount_usd_cents",
+                to_usd_cents(data["amount_cents"], data.get("currency", "CAD")),
+            )
             if data.get("event_type") == EventType.AUTH.value:
                 event = CardAuthEvent.model_validate(data)
             else:

@@ -150,7 +150,6 @@ class NormalizedWireEvent(BasePaymentEvent):
     sender_bank_id: str = Field(..., min_length=1, max_length=64)
     receiver_bank_id: str = Field(..., min_length=1, max_length=64)
     correspondent_chain: List[str] = Field(default_factory=list)
-    amount_usd: Optional[int] = Field(default=None, gt=0)
     value_date: date
     transfer_scope: TransferScope
     domestic_rail: Optional[DomesticRail] = None
