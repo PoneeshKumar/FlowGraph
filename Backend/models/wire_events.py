@@ -3,9 +3,13 @@ from pydantic import BaseModel, Field
 from enum import Enum
 from typing import Optional, List
 from datetime import datetime, date
-import uuid
 
-from models.card_events import Rail
+from models.card_events import (
+    BasePaymentEvent,
+    EventStatus,
+    EventType,
+    Rail,
+)
 
 
 # transfer scope: domestic within jurisdiction or international across borders
@@ -135,20 +139,19 @@ class RawSWIFTEvent(BaseModel):
 
 
 # normalized wire event after enrichment from raw payload
-class NormalizedWireEvent(BaseModel):
-    event_id: str = Field(default_factory=lambda: str(uuid.uuid4()))
+# inherits the shared shape from BasePaymentEvent: event_id, rail, event_type,
+# status, sender_id, receiver_id, amount_cents, currency, timestamp_utc, raw_payload
+class NormalizedWireEvent(BasePaymentEvent):
+    rail: Rail = Field(default=Rail.WIRE)
+    event_type: EventType = Field(default=EventType.SETTLEMENT)
+    status: EventStatus = Field(default=EventStatus.SETTLED)
+
     source_message_id: str = Field(..., min_length=1, max_length=36)
-    sender_id: str = Field(..., min_length=1, max_length=256)
-    receiver_id: str = Field(..., min_length=1, max_length=256)
     sender_bank_id: str = Field(..., min_length=1, max_length=64)
     receiver_bank_id: str = Field(..., min_length=1, max_length=64)
     correspondent_chain: List[str] = Field(default_factory=list)
-    amount: int = Field(..., gt=0)
-    currency: str = Field(..., min_length=3, max_length=3)
     amount_usd: Optional[int] = Field(default=None, gt=0)
-    timestamp: datetime
     value_date: date
-    rail: Rail = Rail.WIRE
     transfer_scope: TransferScope
     domestic_rail: Optional[DomesticRail] = None
     wire_network: WireNetwork
@@ -156,4 +159,3 @@ class NormalizedWireEvent(BaseModel):
     is_bank_to_bank: bool = False
     geo_risk: GeoRiskProfile
     regulatory: RegulatoryProfile
-    raw_payload: dict

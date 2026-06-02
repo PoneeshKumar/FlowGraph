@@ -11,10 +11,7 @@ from config import (
     TOPIC_NORMALIZED,
     TOPIC_WIRE_RAW,
 )
-from normalizer.ach_normalizer import normalize_ach
-from normalizer.card_normalizer import normalize_card
-from normalizer.crypto_normalizer import normalize_crypto
-from normalizer.wire_normalizer import normalize_wire
+from models.card_events import CardAuthEvent, CardSettlementEvent, EventType
 
 logger = logging.getLogger(__name__)
 
@@ -43,49 +40,32 @@ normalized_topic = app.topic(TOPIC_NORMALIZED, value_type=bytes)
 async def process_card(stream):
     async for key, raw in stream.items():
         try:
-            event = normalize_card(json.loads(raw))
+            data = json.loads(raw)
+            if data.get("event_type") == EventType.AUTH.value:
+                event = CardAuthEvent.model_validate(data)
+            else:
+                event = CardSettlementEvent.model_validate(data)
             await normalized_topic.send(
                 key=event.sender_id.encode(),
                 value=event.model_dump_json().encode(),
             )
         except Exception:
-            logger.exception("card normalization failed, key=%r", key)
+            logger.exception("card processing failed, key=%r", key)
 
 
 @app.agent(ach_raw_topic)
 async def process_ach(stream):
     async for key, raw in stream.items():
-        try:
-            event = normalize_ach(json.loads(raw))
-            await normalized_topic.send(
-                key=event.sender_id.encode(),
-                value=event.model_dump_json().encode(),
-            )
-        except Exception:
-            logger.exception("ach normalization failed, key=%r", key)
+        logger.warning("ACH rail not yet implemented, dropping key=%r", key)
 
 
 @app.agent(wire_raw_topic)
 async def process_wire(stream):
     async for key, raw in stream.items():
-        try:
-            event = normalize_wire(json.loads(raw))
-            await normalized_topic.send(
-                key=event.sender_id.encode(),
-                value=event.model_dump_json().encode(),
-            )
-        except Exception:
-            logger.exception("wire normalization failed, key=%r", key)
+        logger.warning("WIRE rail not yet implemented, dropping key=%r", key)
 
 
 @app.agent(crypto_raw_topic)
 async def process_crypto(stream):
     async for key, raw in stream.items():
-        try:
-            event = normalize_crypto(json.loads(raw))
-            await normalized_topic.send(
-                key=event.sender_id.encode(),
-                value=event.model_dump_json().encode(),
-            )
-        except Exception:
-            logger.exception("crypto normalization failed, key=%r", key)
+        logger.warning("CRYPTO rail not yet implemented, dropping key=%r", key)
