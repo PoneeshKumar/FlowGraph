@@ -5,6 +5,8 @@ import faust
 
 from config import (
     KAFKA_BROKER,
+    OUTBOX_CLAIM_SECONDS,
+    OUTBOX_TICK_SECONDS,
     TOPIC_ACH_RAW,
     TOPIC_CARD_RAW,
     TOPIC_CRYPTO_RAW,
@@ -13,6 +15,7 @@ from config import (
 )
 from models.card_events import CardAuthEvent, CardSettlementEvent, EventType
 from fx import to_usd_cents
+from db import postgres, neo4j, redis as redis_db
 
 logger = logging.getLogger(__name__)
 
@@ -35,6 +38,59 @@ crypto_raw_topic = app.topic(TOPIC_CRYPTO_RAW, value_type=bytes)
 # All rails land here after normalization, keyed by sender_id so downstream
 # consumers see a consistent partition key regardless of rail
 normalized_topic = app.topic(TOPIC_NORMALIZED, value_type=bytes)
+
+
+@app.task
+async def on_startup():
+    # create the payments table and the :Event(id) uniqueness constraint once
+    await postgres.init_schema()
+    await neo4j.init_constraints()
+
+
+async def drive_graph_and_cache(row: dict) -> None:
+    """The shared replay unit. Called by process_normalized after the Postgres
+    insert AND by the outbox worker for stuck rows, so both paths drive identical,
+    idempotent writes. On success it clears the outbox flag; on failure it leaves
+    the flag set for the outbox worker to retry."""
+    await neo4j.upsert_payment_graph(row)
+    await redis_db.zadd_edge(row)
+    await postgres.clear_outbox(row["event_id"])
+
+
+# ── The engine ──────────────────────────────────────────────────────────────
+# 1. Postgres write first (source of truth, pending_graph_sync=TRUE). A redelivery
+#    returns None (row already existed) -> skip graph/cache entirely.
+# 2+3. Neo4j upsert + Redis cache (idempotent under replay).
+# 4. clear_outbox on success. On any failure the flag stays set and the
+#    @app.timer outbox worker re-drives the row.
+@app.agent(normalized_topic)
+async def process_normalized(stream):
+    async for key, raw in stream.items():
+        event_id = None
+        try:
+            event = json.loads(raw)
+            event_id = str(event.get("event_id"))
+            row = await postgres.write_payment(event)
+            if row is None:
+                continue  # redelivery — Postgres dedup gate
+            await drive_graph_and_cache(row)
+        except Exception:
+            # do not re-raise: the Postgres row (if written) stays pending and
+            # the outbox worker recovers it; the offset advances
+            logger.exception("normalized processing failed, event_id=%s key=%r", event_id, key)
+
+
+@app.timer(interval=OUTBOX_TICK_SECONDS)
+async def outbox_recovery():
+    try:
+        rows = await postgres.claim_stuck_rows(older_than_seconds=OUTBOX_CLAIM_SECONDS)
+        for row in rows:
+            try:
+                await drive_graph_and_cache(row)
+            except Exception:
+                logger.exception("outbox re-drive failed, event_id=%s", row.get("event_id"))
+    except Exception:
+        logger.exception("outbox recovery sweep failed")
 
 
 @app.agent(card_raw_topic)
