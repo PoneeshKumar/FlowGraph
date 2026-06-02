@@ -60,17 +60,19 @@ class BasePaymentEvent(BaseModel):
     timestamp_utc: datetime
 
     # the original untouched payload
-    raw_payload: dict[str, Any] = Field(default_factor=dict)
+    raw_payload: dict[str, Any] = Field(default_factory=dict)
 
     @field_validator("timestamp_utc", mode="before")
     @classmethod
-    def enforcu_utc(cls, v: Any) -> datetime:
-        # only have UTC no native times
+    def enforce_utc(cls, v: Any) -> datetime:
+        # naive datetimes are rejected; tz-aware non-UTC is converted to UTC
+        # so every stored timestamp and Redis score is in a single timezone
         if isinstance(v, datetime):
             if v.tzinfo is None:
                 raise ValueError(
                     "timestamp_utc must be timezone-aware (UTC)."
                 )
+            return v.astimezone(timezone.utc)
         return v
 
     @field_validator("currency")
