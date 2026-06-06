@@ -1,0 +1,102 @@
+# ============================================================
+# FlowGraph — Real-Time Money Flow Intelligence Engine
+# requirements.txt
+#
+# Free-tier compatible stack:
+#   - Neo4j AuraDB Free (1 free instance, 200k node limit)
+#   - Upstash Redis Free (10k commands/day)
+#   - Supabase Free (Postgres, 500MB storage)
+#   - Confluent Kafka Free (1 cluster, 100MB storage)
+#   - Google Gemini API (free tier via google-generativeai)
+# ============================================================
+
+# ---------------------------
+# Streaming / Kafka
+# ---------------------------
+faust-streaming==0.10.14         # Kafka stream processing DSL (pure Python)
+aiokafka==0.10.0                 # Async Kafka consumer/producer
+confluent-kafka==2.4.0           # Alternative low-level Kafka client
+
+# ---------------------------
+# Graph Database — Neo4j
+# ---------------------------
+neo4j==5.20.0                    # Official async Neo4j Python driver
+                                 # → use with Neo4j AuraDB Free tier
+
+# ---------------------------
+# In-Memory Graph Algorithms
+# ---------------------------
+networkx==3.3                    # Graph algorithm primitives (DFS, PageRank)
+python-louvain==0.16             # Louvain community detection algorithm
+                                 # (import as `community`)
+numpy==1.26.4                    # Required by networkx algorithms
+
+# ---------------------------
+# Relational DB — Postgres (Outbox Pattern)
+# ---------------------------
+asyncpg==0.29.0                  # Async Postgres driver (fast, pure C)
+sqlalchemy[asyncio]==2.0.30      # ORM + async session support
+alembic==1.13.1                  # Schema migrations
+
+# ---------------------------
+# Redis — Time-Windowed Edge Weights
+# ---------------------------
+redis[hiredis]==5.0.4            # Redis client + hiredis C-extension parser
+                                 # → use with Upstash Redis free tier
+
+# ---------------------------
+# Task Queue — Outbox Worker
+# ---------------------------
+celery[redis]==5.3.6             # Background worker for graph sync retries
+kombu==5.3.3                     # Celery's messaging dependency
+
+# ---------------------------
+# AI Enrichment — Google Gemini (Free Tier)
+# ---------------------------
+google-generativeai==0.7.2       # Gemini API client (gemini-1.5-flash is free)
+                                 # Free tier: 15 RPM, 1M tokens/day (Flash)
+                                 # Model recommended: gemini-1.5-flash
+
+# ---------------------------
+# API Layer
+# ---------------------------
+fastapi==0.111.0                 # Async REST API framework
+uvicorn[standard]==0.29.0        # ASGI server for FastAPI
+pydantic==2.7.1                  # Request/response schema validation
+python-dotenv==1.0.1             # Load .env for local dev
+
+# ---------------------------
+# HTTP Client (internal service calls)
+# ---------------------------
+httpx==0.27.0                    # Async HTTP client
+aiohttp==3.9.5                   # Alternative async HTTP (used by some Kafka libs)
+
+# ---------------------------
+# Observability
+# ---------------------------
+opentelemetry-api==1.24.0
+opentelemetry-sdk==1.24.0
+opentelemetry-instrumentation-fastapi==0.45b0
+opentelemetry-instrumentation-redis==0.45b0
+opentelemetry-exporter-otlp==1.24.0
+prometheus-client==0.20.0        # Exposes /metrics endpoint for Prometheus scrape
+
+# ---------------------------
+# Serialization
+# ---------------------------
+orjson==3.10.3                   # Fast JSON (significantly faster than stdlib)
+msgpack==1.0.8                   # Binary serialization for Kafka messages
+
+# ---------------------------
+# Testing
+# ---------------------------
+pytest==8.2.0
+pytest-asyncio==0.23.6
+pytest-mock==3.14.0
+httpx==0.27.0                    # Also used as async test client for FastAPI
+
+# ---------------------------
+# Dev / Linting
+# ---------------------------
+ruff==0.4.4                      # Fast linter + formatter (replaces black+flake8)
+mypy==1.10.0                     # Static type checking

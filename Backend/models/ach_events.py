@@ -34,7 +34,7 @@ def hash_account_number(account_number: str, routing_number: str) -> str:
 
 class BaseACHEvent(BasePaymentEvent):
     rail: Rail = Field(default=Rail.ACH)
-    event_type: EventType = Field(default=EventType.PENDING)
+    event_type: EventType = Field(default=EventType.SETTLEMENT)
 
     ach_event_type: ACHEventType
 
