@@ -1,9 +1,13 @@
-# Backend/models/wire.py
-from pydantic import BaseModel, Field
+# Backend/models/wire_events.py
+import hashlib
+import random
+import string
+import uuid
+from datetime import datetime, date, timezone
 from enum import Enum
 from typing import Optional, List
-from datetime import datetime, date
-import uuid
+
+from pydantic import BaseModel, Field
 
 from models.card_events import Rail
 
@@ -157,3 +161,62 @@ class NormalizedWireEvent(BaseModel):
     geo_risk: GeoRiskProfile
     regulatory: RegulatoryProfile
     raw_payload: dict
+
+
+# ---------------------------------------------------------------------------
+# WireType and WireEvent — produced by wire_generator to payments.raw.wire
+# ---------------------------------------------------------------------------
+
+class WireType(str, Enum):
+    FEDWIRE = "FEDWIRE"
+    SWIFT = "SWIFT"
+
+
+class WireEventStatus(str, Enum):
+    PENDING = "PENDING"
+    SETTLED = "SETTLED"
+
+
+class WireEvent(BaseModel):
+    event_id: str = Field(default_factory=lambda: str(uuid.uuid4()))
+    schema_version: int = Field(default=1)
+    rail: Rail = Field(default=Rail.WIRE)
+    wire_type: WireType
+    status: WireEventStatus
+    sender_id: str = Field(..., min_length=1, max_length=256)
+    receiver_id: str = Field(..., min_length=1, max_length=256)
+    sender_bank_id: str = Field(..., min_length=1, max_length=64)
+    receiver_bank_id: str = Field(..., min_length=1, max_length=64)
+    amount_cents: int = Field(..., gt=0)
+    amount_usd_cents: int = Field(..., gt=0)
+    currency: str = Field(default="USD", min_length=3, max_length=3)
+    imad: Optional[str] = Field(default=None, max_length=22)
+    uetr: Optional[str] = Field(default=None, min_length=36, max_length=36)
+    correspondent_hops: List[CorrespondentHop] = Field(default_factory=list)
+    purpose_code: str = Field(..., min_length=1, max_length=16)
+    timestamp_utc: datetime
+    expected_settlement_date: date
+    raw_payload: dict = Field(default_factory=dict)
+
+    class Config:
+        use_enum_values = False
+
+
+# ---------------------------------------------------------------------------
+# Helper functions
+# ---------------------------------------------------------------------------
+
+def generate_imad() -> str:
+    """IMAD: YYYYMMDD (8) + ABA digits (8) + sequence (6) = 22 chars."""
+    today = datetime.now(timezone.utc).strftime("%Y%m%d")
+    aba = "".join(random.choices(string.digits, k=8))
+    seq = "".join(random.choices(string.ascii_uppercase + string.digits, k=6))
+    return f"{today}{aba}{seq}"
+
+
+def generate_uetr() -> str:
+    return str(uuid.uuid4())
+
+
+def hash_account_number(account: str) -> str:
+    return hashlib.sha256(account.encode()).hexdigest()
