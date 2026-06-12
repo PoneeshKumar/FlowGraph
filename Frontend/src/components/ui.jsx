@@ -1,3 +1,4 @@
+/* eslint-disable react-refresh/only-export-components -- shared primitives module: mixes components, hooks, and tokens by design */
 import { useEffect, useState } from 'react'
 
 /* Shared primitives for the Liquid Glass Ledger system. */
