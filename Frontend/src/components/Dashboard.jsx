@@ -59,18 +59,25 @@ function AlertRow({ alert, isOpen, onToggle }) {
         <AnimatePresence initial={false}>
           {isOpen && (
             <motion.div
-              initial={{ height: 0, opacity: 0 }}
-              animate={{ height: 'auto', opacity: 1 }}
-              exit={{ height: 0, opacity: 0 }}
-              transition={{ duration: 0.26, ease: [0.32, 0.72, 0, 1] }}
+              initial={{ height: 0 }}
+              animate={{ height: 'auto' }}
+              exit={{ height: 0 }}
+              transition={{ duration: 0.45, ease: [0.22, 1, 0.36, 1] }}
               className="overflow-hidden"
             >
-              <div className="ml-[15px] mt-2.5 border-l-2 pl-3.5" style={{ borderColor: tone }}>
+              <motion.div
+                initial={{ opacity: 0, y: -10, filter: 'blur(4px)' }}
+                animate={{ opacity: 1, y: 0, filter: 'blur(0px)' }}
+                exit={{ opacity: 0, transition: { duration: 0.14 } }}
+                transition={{ duration: 0.4, delay: 0.06, ease: [0.22, 1, 0.36, 1] }}
+                className="ml-[15px] mt-2.5 border-l-2 pl-3.5"
+                style={{ borderColor: tone }}
+              >
                 <div className="mb-1 text-[10px] font-bold uppercase tracking-[0.1em] text-ink-3">
                   AI Analysis
                 </div>
                 <div className="text-xs leading-[1.7] text-ink-2">{alert.aiExplanation}</div>
-              </div>
+              </motion.div>
             </motion.div>
           )}
         </AnimatePresence>
@@ -197,10 +204,10 @@ export default function Dashboard({ onNav }) {
                     <motion.tr
                       key={tx.id}
                       layout
-                      initial={{ opacity: 0, y: 6 }}
+                      initial={{ opacity: 0, y: 8 }}
                       animate={{ opacity: 1, y: 0 }}
-                      exit={{ opacity: 0 }}
-                      transition={{ duration: 0.25, delay: i * 0.02 }}
+                      exit={{ opacity: 0, transition: { duration: 0.12 } }}
+                      transition={{ duration: 0.38, delay: i * 0.03, ease: [0.22, 1, 0.36, 1] }}
                       className="border-b border-line transition-colors duration-150 last:border-b-0 hover:bg-hover"
                     >
                       <td className="px-4 py-2.5 font-mono text-[10.5px] text-ink-3">{tx.id}</td>

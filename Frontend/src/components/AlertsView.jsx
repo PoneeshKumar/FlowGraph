@@ -57,17 +57,22 @@ function AlertRow({ alert, isOpen, onToggle }) {
         <span className="text-right text-[11px] text-ink-4">{alert.timestamp}</span>
       </div>
 
-      {/* Inline detail — expands full width under the row */}
+      {/* Inline detail — pours open under the row */}
       <AnimatePresence initial={false}>
         {isOpen && (
           <motion.div
-            initial={{ height: 0, opacity: 0 }}
-            animate={{ height: 'auto', opacity: 1 }}
-            exit={{ height: 0, opacity: 0 }}
-            transition={{ duration: 0.28, ease: [0.32, 0.72, 0, 1] }}
+            initial={{ height: 0 }}
+            animate={{ height: 'auto' }}
+            exit={{ height: 0 }}
+            transition={{ duration: 0.5, ease: [0.22, 1, 0.36, 1] }}
             className="overflow-hidden"
           >
-            <div className="grid grid-cols-[1fr_240px] gap-8 bg-hover px-7 pb-5 pt-1 pl-[27px]">
+            <motion.div
+              initial={{ opacity: 0, y: -14, filter: 'blur(5px)' }}
+              animate={{ opacity: 1, y: 0, filter: 'blur(0px)' }}
+              exit={{ opacity: 0, transition: { duration: 0.16 } }}
+              transition={{ duration: 0.45, delay: 0.07, ease: [0.22, 1, 0.36, 1] }}
+              className="grid grid-cols-[1fr_240px] gap-8 bg-hover px-7 pb-5 pt-1 pl-[27px]">
               {/* AI analysis */}
               <div className="border-l-2 pl-4" style={{ borderColor: color }}>
                 <div className="mb-1.5 flex items-center gap-2.5">
@@ -108,7 +113,7 @@ function AlertRow({ alert, isOpen, onToggle }) {
                   </button>
                 ))}
               </div>
-            </div>
+            </motion.div>
           </motion.div>
         )}
       </AnimatePresence>
@@ -182,10 +187,10 @@ export default function AlertsView() {
           {filtered.map((alert, i) => (
             <motion.div
               key={alert.id}
-              initial={{ opacity: 0 }}
-              animate={{ opacity: 1 }}
-              exit={{ opacity: 0 }}
-              transition={{ duration: 0.2, delay: i * 0.025 }}
+              initial={{ opacity: 0, y: 10 }}
+              animate={{ opacity: 1, y: 0 }}
+              exit={{ opacity: 0, transition: { duration: 0.15 } }}
+              transition={{ duration: 0.4, delay: i * 0.035, ease: [0.22, 1, 0.36, 1] }}
             >
               <AlertRow
                 alert={alert}

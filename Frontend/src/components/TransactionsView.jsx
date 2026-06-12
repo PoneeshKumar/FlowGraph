@@ -75,13 +75,18 @@ function AchBatchRow({ batch, isExpanded, onToggle }) {
       <AnimatePresence initial={false}>
         {isExpanded && (
           <motion.div
-            initial={{ height: 0, opacity: 0 }}
-            animate={{ height: 'auto', opacity: 1 }}
-            exit={{ height: 0, opacity: 0 }}
-            transition={{ duration: 0.3, ease: [0.32, 0.72, 0, 1] }}
+            initial={{ height: 0 }}
+            animate={{ height: 'auto' }}
+            exit={{ height: 0 }}
+            transition={{ duration: 0.5, ease: [0.22, 1, 0.36, 1] }}
             className="overflow-hidden"
           >
-            <div className="border-t border-line bg-hover/50">
+            <motion.div
+              initial={{ opacity: 0, y: -12, filter: 'blur(4px)' }}
+              animate={{ opacity: 1, y: 0, filter: 'blur(0px)' }}
+              exit={{ opacity: 0, transition: { duration: 0.15 } }}
+              transition={{ duration: 0.42, delay: 0.07, ease: [0.22, 1, 0.36, 1] }}
+              className="border-t border-line bg-hover/50">
               <table className="w-full border-collapse">
                 <thead>
                   <tr className="border-b border-line">
@@ -116,7 +121,7 @@ function AchBatchRow({ batch, isExpanded, onToggle }) {
               <div className="px-12 py-2 text-[11px] text-ink-4 tnum">
                 Showing {batch.transactions.length} of {batch.txnCount} transactions in this batch
               </div>
-            </div>
+            </motion.div>
           </motion.div>
         )}
       </AnimatePresence>
@@ -350,10 +355,10 @@ function HistoryTab() {
               <motion.tr
                 key={tx.id}
                 layout
-                initial={{ opacity: 0, y: 6 }}
+                initial={{ opacity: 0, y: 8 }}
                 animate={{ opacity: 1, y: 0 }}
-                exit={{ opacity: 0 }}
-                transition={{ duration: 0.22, delay: i * 0.015 }}
+                exit={{ opacity: 0, transition: { duration: 0.12 } }}
+                transition={{ duration: 0.38, delay: i * 0.025, ease: [0.22, 1, 0.36, 1] }}
                 className={rowBase}
               >
                 <td className={cellId}>{tx.id}</td>

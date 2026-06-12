@@ -37,7 +37,7 @@ function ArrowMarkers() {
   )
 }
 
-function GraphEdge({ edge, fromNode, toNode, isActive }) {
+function GraphEdge({ edge, fromNode, toNode, isActive, index }) {
   const dx = toNode.x - fromNode.x
   const dy = toNode.y - fromNode.y
   const len = Math.sqrt(dx * dx + dy * dy)
@@ -50,25 +50,33 @@ function GraphEdge({ edge, fromNode, toNode, isActive }) {
 
   return (
     <g>
-      <line
+      <motion.line
         x1={fromNode.x} y1={fromNode.y} x2={x2} y2={y2}
         strokeWidth={edge.isCycle ? width + 0.4 : width}
-        opacity={edge.isCycle ? 0.75 : 0.4}
         strokeDasharray={edge.isCycle ? '5 5' : 'none'}
         markerEnd={`url(#arrow-${edge.isCycle ? 'cycle' : fromNode.risk})`}
         stroke={edge.isCycle ? 'var(--critical)' : 'var(--line-strong)'}
+        initial={{ opacity: 0 }}
+        animate={{ opacity: edge.isCycle ? 0.75 : 0.4 }}
+        transition={{ delay: 0.25 + index * 0.025, duration: 0.6, ease: 'easeOut' }}
       />
-      {isActive && (
-        <line
-          x1={fromNode.x} y1={fromNode.y} x2={x2} y2={y2}
-          strokeWidth={width + 0.6}
-          opacity={edge.isCycle ? 0.9 : 0.6}
-          strokeDasharray={edge.isCycle ? '8 10' : '5 12'}
-          strokeLinecap="round"
-          stroke={edge.isCycle ? 'var(--critical)' : 'var(--accent)'}
-          style={{ animation: `flowDash ${dur}s linear infinite` }}
-        />
-      )}
+      {/* Flow pulse — fades in/out instead of popping */}
+      <AnimatePresence>
+        {isActive && (
+          <motion.line
+            x1={fromNode.x} y1={fromNode.y} x2={x2} y2={y2}
+            strokeWidth={width + 0.6}
+            strokeDasharray={edge.isCycle ? '8 10' : '5 12'}
+            strokeLinecap="round"
+            stroke={edge.isCycle ? 'var(--critical)' : 'var(--accent)'}
+            initial={{ opacity: 0 }}
+            animate={{ opacity: edge.isCycle ? 0.9 : 0.6 }}
+            exit={{ opacity: 0 }}
+            transition={{ duration: 0.5, ease: 'easeInOut' }}
+            style={{ animation: `flowDash ${dur}s linear infinite` }}
+          />
+        )}
+      </AnimatePresence>
     </g>
   )
 }
@@ -218,9 +226,9 @@ export default function GraphExplorer() {
       const timeoutId = setTimeout(() => {
         setActiveEdges(s => { const n = new Set(s); n.delete(id); return n })
         timeoutIds.delete(timeoutId)
-      }, 2200)
+      }, 2600)
       timeoutIds.add(timeoutId)
-    }, 700)
+    }, 1100)
     return () => { clearInterval(iv); timeoutIds.forEach(clearTimeout) }
   }, [])
 
@@ -307,11 +315,11 @@ export default function GraphExplorer() {
         >
           <ArrowMarkers />
           <g>
-            {GRAPH_EDGES.map(edge => {
+            {GRAPH_EDGES.map((edge, i) => {
               const from = nodeMap[edge.from]
               const to = nodeMap[edge.to]
               if (!from || !to) return null
-              return <GraphEdge key={edge.id} edge={edge} fromNode={from} toNode={to} isActive={activeEdges.has(edge.id)} />
+              return <GraphEdge key={edge.id} edge={edge} fromNode={from} toNode={to} index={i} isActive={activeEdges.has(edge.id)} />
             })}
           </g>
           <g>
