@@ -1,217 +1,119 @@
-import { useState } from 'react'
+import { motion, AnimatePresence } from 'motion/react'
 
 const NAV = [
-  { id: 'dashboard',    label: 'Dashboard',    icon: GridIcon },
-  { id: 'graph',        label: 'Graph',         icon: GraphIcon },
-  { id: 'alerts',       label: 'Alerts',        icon: AlertIcon, badge: 17 },
-  { id: 'transactions', label: 'Transactions',  icon: TxnIcon },
+  { id: 'dashboard',    label: 'Overview',     icon: GridIcon },
+  { id: 'graph',        label: 'Graph',        icon: GraphIcon },
+  { id: 'alerts',       label: 'Alerts',       icon: AlertIcon, badge: 17 },
+  { id: 'transactions', label: 'Transactions', icon: TxnIcon },
 ]
 
 function GridIcon() {
   return (
     <svg width="15" height="15" viewBox="0 0 15 15" fill="none">
-      <rect x="1" y="1" width="5.5" height="5.5" rx="1.2" fill="currentColor" opacity=".85"/>
-      <rect x="8.5" y="1" width="5.5" height="5.5" rx="1.2" fill="currentColor" opacity=".85"/>
-      <rect x="1" y="8.5" width="5.5" height="5.5" rx="1.2" fill="currentColor" opacity=".85"/>
-      <rect x="8.5" y="8.5" width="5.5" height="5.5" rx="1.2" fill="currentColor" opacity=".85"/>
+      <rect x="1.2" y="1.2" width="5.3" height="5.3" rx="1.6" stroke="currentColor" strokeWidth="1.2"/>
+      <rect x="8.5" y="1.2" width="5.3" height="5.3" rx="1.6" stroke="currentColor" strokeWidth="1.2"/>
+      <rect x="1.2" y="8.5" width="5.3" height="5.3" rx="1.6" stroke="currentColor" strokeWidth="1.2"/>
+      <rect x="8.5" y="8.5" width="5.3" height="5.3" rx="1.6" stroke="currentColor" strokeWidth="1.2" fill="currentColor" fillOpacity=".25"/>
     </svg>
   )
 }
 function GraphIcon() {
   return (
     <svg width="15" height="15" viewBox="0 0 15 15" fill="none">
-      <circle cx="7.5" cy="7.5" r="2.2" fill="currentColor"/>
-      <circle cx="2"   cy="3.5" r="1.5" fill="currentColor" opacity=".65"/>
-      <circle cx="13"  cy="3.5" r="1.5" fill="currentColor" opacity=".65"/>
-      <circle cx="2"   cy="11.5" r="1.5" fill="currentColor" opacity=".65"/>
-      <circle cx="13"  cy="11.5" r="1.5" fill="currentColor" opacity=".65"/>
-      <line x1="3.4"  y1="4.5"  x2="5.9"  y2="6.6"  stroke="currentColor" strokeWidth="1" opacity=".45"/>
-      <line x1="11.6" y1="4.5"  x2="9.1"  y2="6.6"  stroke="currentColor" strokeWidth="1" opacity=".45"/>
-      <line x1="3.4"  y1="10.5" x2="5.9"  y2="8.4"  stroke="currentColor" strokeWidth="1" opacity=".45"/>
-      <line x1="11.6" y1="10.5" x2="9.1"  y2="8.4"  stroke="currentColor" strokeWidth="1" opacity=".45"/>
+      <circle cx="7.5" cy="7.5" r="2" stroke="currentColor" strokeWidth="1.2"/>
+      <circle cx="2.2" cy="3.2" r="1.3" fill="currentColor" opacity=".7"/>
+      <circle cx="12.8" cy="3.2" r="1.3" fill="currentColor" opacity=".7"/>
+      <circle cx="2.2" cy="11.8" r="1.3" fill="currentColor" opacity=".7"/>
+      <circle cx="12.8" cy="11.8" r="1.3" fill="currentColor" opacity=".7"/>
+      <path d="M3.3 4.2L6 6M11.7 4.2L9 6M3.3 10.8L6 9M11.7 10.8L9 9" stroke="currentColor" strokeWidth="1" opacity=".5"/>
     </svg>
   )
 }
 function AlertIcon() {
   return (
     <svg width="15" height="15" viewBox="0 0 15 15" fill="none">
-      <path d="M7.5 1.5L13.5 12H1.5L7.5 1.5Z" stroke="currentColor" strokeWidth="1.3" strokeLinejoin="round"/>
-      <line x1="7.5" y1="5.5" x2="7.5" y2="8.5" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round"/>
-      <circle cx="7.5" cy="10.5" r="0.75" fill="currentColor"/>
+      <path d="M7.5 1.8L13.6 12.2H1.4L7.5 1.8Z" stroke="currentColor" strokeWidth="1.2" strokeLinejoin="round"/>
+      <path d="M7.5 5.6v3" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round"/>
+      <circle cx="7.5" cy="10.5" r=".75" fill="currentColor"/>
     </svg>
   )
 }
 function TxnIcon() {
   return (
     <svg width="15" height="15" viewBox="0 0 15 15" fill="none">
-      <line x1="2" y1="7.5" x2="13" y2="7.5" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round"/>
-      <polyline points="9.5,4.5 13,7.5 9.5,10.5" stroke="currentColor" strokeWidth="1.3" strokeLinejoin="round" strokeLinecap="round" fill="none"/>
-      <line x1="2" y1="4.5" x2="6.5" y2="4.5" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round" opacity=".45"/>
-      <line x1="2" y1="10.5" x2="6.5" y2="10.5" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round" opacity=".45"/>
+      <path d="M2 5h9.5M9 2.5L11.5 5 9 7.5" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round" strokeLinejoin="round"/>
+      <path d="M13 10H3.5M6 7.5L3.5 10 6 12.5" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round" strokeLinejoin="round" opacity=".55"/>
     </svg>
   )
 }
-
 function SunIcon() {
   return (
     <svg width="13" height="13" viewBox="0 0 13 13" fill="none">
-      <circle cx="6.5" cy="6.5" r="2.5" fill="currentColor"/>
-      <line x1="6.5" y1="0.5" x2="6.5" y2="2.5"   stroke="currentColor" strokeWidth="1.3" strokeLinecap="round"/>
-      <line x1="6.5" y1="10.5" x2="6.5" y2="12.5" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round"/>
-      <line x1="0.5" y1="6.5" x2="2.5" y2="6.5"   stroke="currentColor" strokeWidth="1.3" strokeLinecap="round"/>
-      <line x1="10.5" y1="6.5" x2="12.5" y2="6.5" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round"/>
-      <line x1="2.3" y1="2.3" x2="3.7" y2="3.7"   stroke="currentColor" strokeWidth="1.3" strokeLinecap="round"/>
-      <line x1="9.3" y1="9.3" x2="10.7" y2="10.7" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round"/>
-      <line x1="9.3" y1="2.3" x2="10.7" y2="3.7"  stroke="currentColor" strokeWidth="1.3" strokeLinecap="round"/>
-      <line x1="2.3" y1="9.3" x2="3.7" y2="10.7"  stroke="currentColor" strokeWidth="1.3" strokeLinecap="round"/>
+      <circle cx="6.5" cy="6.5" r="2.4" stroke="currentColor" strokeWidth="1.2"/>
+      <path d="M6.5.8v1.4M6.5 10.8v1.4M.8 6.5h1.4M10.8 6.5h1.4M2.5 2.5l1 1M9.5 9.5l1 1M10.5 2.5l-1 1M3.5 9.5l-1 1" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round"/>
     </svg>
   )
 }
 function MoonIcon() {
   return (
     <svg width="13" height="13" viewBox="0 0 13 13" fill="none">
-      <path d="M10.5 7.5A5 5 0 015.5 2.5a5 5 0 100 8 5 5 0 005-3z" fill="currentColor"/>
+      <path d="M11 8.1A4.8 4.8 0 015 2a4.9 4.9 0 102.5 9.5A4.85 4.85 0 0011 8.1z" stroke="currentColor" strokeWidth="1.2" strokeLinejoin="round"/>
     </svg>
   )
 }
 
+const BARS = [40, 58, 36, 64, 47, 52, 33, 49, 61, 41]
+
 export default function Sidebar({ active, onNav, theme, onToggleTheme }) {
-  const [hoverId, setHoverId] = useState(null)
-
   return (
-    <aside style={{
-      width: 'var(--sidebar-w)',
-      minWidth: 'var(--sidebar-w)',
-      background: 'var(--sidebar-bg)',
-      borderRight: '1px solid var(--sidebar-border)',
-      display: 'flex',
-      flexDirection: 'column',
-      height: '100vh',
-      position: 'sticky',
-      top: 0,
-      zIndex: 10,
-    }}>
+    <aside className="glass-strong relative z-10 m-4 mr-0 flex w-[226px] shrink-0 flex-col self-stretch rounded-2xl">
 
-      {/* Logo */}
-      <div style={{
-        padding: '22px 20px 18px',
-        borderBottom: '1px solid var(--sidebar-border)',
-        display: 'flex',
-        alignItems: 'center',
-        gap: 10,
-      }}>
-        <div style={{
-          width: 28, height: 28,
-          background: 'var(--accent)',
-          borderRadius: 7,
-          display: 'flex', alignItems: 'center', justifyContent: 'center',
-          flexShrink: 0,
-        }}>
-          <svg width="14" height="14" viewBox="0 0 14 14" fill="none">
-            <circle cx="7" cy="7" r="2" fill="white"/>
-            <line x1="7" y1="1" x2="7" y2="4.5" stroke="white" strokeWidth="1.5" strokeLinecap="round"/>
-            <line x1="7" y1="9.5" x2="7" y2="13" stroke="white" strokeWidth="1.5" strokeLinecap="round"/>
-            <line x1="1" y1="7" x2="4.5" y2="7" stroke="white" strokeWidth="1.5" strokeLinecap="round"/>
-            <line x1="9.5" y1="7" x2="13" y2="7" stroke="white" strokeWidth="1.5" strokeLinecap="round"/>
+      {/* Wordmark */}
+      <div className="flex items-center gap-3 border-b border-line px-5 pb-4 pt-5">
+        <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-[10px] bg-accent/15 ring-1 ring-accent/30">
+          <svg width="15" height="15" viewBox="0 0 14 14" fill="none">
+            <circle cx="7" cy="7" r="2" fill="var(--accent)"/>
+            <path d="M7 1v3.4M7 9.6V13M1 7h3.4M9.6 7H13" stroke="var(--accent)" strokeWidth="1.4" strokeLinecap="round"/>
           </svg>
         </div>
         <div>
-          <div style={{
-            fontFamily: 'var(--font-display)',
-            fontWeight: 700,
-            fontSize: 15,
-            letterSpacing: '-0.2px',
-            color: 'rgba(255,255,255,0.92)',
-          }}>
-            FlowGraph
-          </div>
-          <div style={{
-            fontSize: 10,
-            color: 'rgba(255,255,255,0.30)',
-            letterSpacing: '0.05em',
-            textTransform: 'uppercase',
-            marginTop: 1,
-          }}>
-            Intelligence Engine
+          <div className="font-display text-[16px] font-medium tracking-tight text-ink">FlowGraph</div>
+          <div className="mt-px text-[9.5px] font-semibold uppercase tracking-[0.14em] text-ink-4">
+            Network Intelligence
           </div>
         </div>
       </div>
 
-      {/* Section label */}
-      <div style={{
-        padding: '18px 20px 6px',
-        fontSize: 10,
-        letterSpacing: '0.09em',
-        textTransform: 'uppercase',
-        color: 'rgba(255,255,255,0.22)',
-        fontWeight: 600,
-      }}>
-        Navigation
-      </div>
-
-      {/* Nav items */}
-      <nav style={{ padding: '2px 10px', flex: 1 }}>
+      {/* Nav */}
+      <nav className="flex-1 px-3 pt-4">
+        <div className="mb-2 px-2 text-[10px] font-bold uppercase tracking-[0.13em] text-ink-4">
+          Workspace
+        </div>
         {NAV.map(item => {
           const isActive = active === item.id
-          const isHover = hoverId === item.id && !isActive
           const Icon = item.icon
           return (
             <button
               key={item.id}
               onClick={() => onNav(item.id)}
-              onMouseEnter={() => setHoverId(item.id)}
-              onMouseLeave={() => setHoverId(null)}
-              style={{
-                width: '100%',
-                display: 'flex', alignItems: 'center', gap: 9,
-                padding: '8px 10px',
-                borderRadius: 'var(--radius-sm)',
-                color: isActive
-                  ? 'var(--sidebar-accent)'
-                  : isHover
-                  ? 'rgba(255,255,255,0.80)'
-                  : 'var(--sidebar-text)',
-                background: isActive
-                  ? 'var(--sidebar-active-bg)'
-                  : isHover
-                  ? 'rgba(255,255,255,0.05)'
-                  : 'transparent',
-                transition: 'all 0.13s ease',
-                marginBottom: 1,
-                position: 'relative',
-              }}
+              className={`group relative mb-0.5 flex w-full items-center gap-2.5 rounded-lg px-2.5 py-2 text-[13px] transition-colors duration-200
+                ${isActive ? 'text-accent' : 'text-ink-3 hover:text-ink-2'}`}
             >
               {isActive && (
-                <div style={{
-                  position: 'absolute',
-                  left: -1, top: '50%',
-                  transform: 'translateY(-50%)',
-                  width: 3, height: '55%',
-                  background: 'var(--sidebar-accent)',
-                  borderRadius: '0 2px 2px 0',
-                }} />
+                <motion.span
+                  layoutId="nav-pill"
+                  className="absolute inset-0 rounded-lg bg-accent/10 ring-1 ring-accent/25"
+                  transition={{ type: 'spring', stiffness: 420, damping: 34 }}
+                />
               )}
-              <Icon />
-              <span style={{
-                fontSize: 13,
-                fontWeight: isActive ? 600 : 400,
-                flex: 1,
-                textAlign: 'left',
-                letterSpacing: '-0.1px',
-              }}>
+              <span className="relative z-[1] transition-transform duration-200 group-hover:scale-110">
+                <Icon />
+              </span>
+              <span className={`relative z-[1] flex-1 text-left tracking-tight ${isActive ? 'font-semibold' : 'font-normal'}`}>
                 {item.label}
               </span>
               {item.badge && (
-                <span style={{
-                  background: 'rgba(200, 36, 26, 0.18)',
-                  border: '1px solid rgba(200, 36, 26, 0.35)',
-                  color: '#E87168',
-                  fontSize: 10,
-                  fontFamily: 'var(--font-mono)',
-                  padding: '1px 5px',
-                  borderRadius: 99,
-                  fontWeight: 700,
-                }}>
+                <span className="relative z-[1] rounded-full border border-critical/30 bg-critical/10 px-1.5 py-px font-mono text-[10px] font-bold text-critical tnum">
                   {item.badge}
                 </span>
               )}
@@ -221,77 +123,53 @@ export default function Sidebar({ active, onNav, theme, onToggleTheme }) {
       </nav>
 
       {/* Theme toggle */}
-      <div style={{ padding: '0 10px 8px' }}>
+      <div className="px-3 pb-2">
         <button
           onClick={onToggleTheme}
-          style={{
-            width: '100%',
-            display: 'flex', alignItems: 'center', gap: 9,
-            padding: '7px 10px',
-            borderRadius: 'var(--radius-sm)',
-            color: 'rgba(255,255,255,0.40)',
-            background: 'transparent',
-            transition: 'all 0.13s ease',
-            fontSize: 12,
-          }}
-          onMouseEnter={e => { e.currentTarget.style.color = 'rgba(255,255,255,0.70)'; e.currentTarget.style.background = 'rgba(255,255,255,0.05)' }}
-          onMouseLeave={e => { e.currentTarget.style.color = 'rgba(255,255,255,0.40)'; e.currentTarget.style.background = 'transparent' }}
+          className="flex w-full items-center gap-2.5 rounded-lg px-2.5 py-2 text-xs text-ink-3 transition-colors duration-200 hover:bg-hover hover:text-ink-2"
         >
-          {theme === 'light' ? <MoonIcon /> : <SunIcon />}
-          <span style={{ letterSpacing: '-0.1px' }}>
-            {theme === 'light' ? 'Dark mode' : 'Light mode'}
+          <span className="relative h-[13px] w-[13px]">
+            <AnimatePresence mode="wait" initial={false}>
+              <motion.span
+                key={theme}
+                className="absolute inset-0 flex items-center justify-center"
+                initial={{ rotate: -90, opacity: 0, scale: 0.6 }}
+                animate={{ rotate: 0, opacity: 1, scale: 1 }}
+                exit={{ rotate: 90, opacity: 0, scale: 0.6 }}
+                transition={{ duration: 0.25, ease: [0.32, 0.72, 0, 1] }}
+              >
+                {theme === 'light' ? <MoonIcon /> : <SunIcon />}
+              </motion.span>
+            </AnimatePresence>
           </span>
+          {theme === 'light' ? 'Dark appearance' : 'Light appearance'}
         </button>
       </div>
 
-      {/* Network status */}
-      <div style={{
-        padding: '0 16px 14px',
-        borderTop: '1px solid var(--sidebar-border)',
-        paddingTop: 14,
-        margin: '0 0 0 0',
-      }}>
-        <div style={{
-          background: 'rgba(255,255,255,0.04)',
-          border: '1px solid var(--sidebar-border)',
-          borderRadius: 'var(--radius)',
-          padding: '10px 12px',
-        }}>
-          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 }}>
-            <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-              <div style={{
-                width: 6, height: 6, borderRadius: '50%',
-                background: 'var(--sidebar-accent)',
-                animation: 'subtlePulse 2.5s ease-in-out infinite',
-              }} />
-              <span style={{ fontSize: 11, color: 'rgba(255,255,255,0.50)', fontWeight: 500 }}>
-                Network Live
-              </span>
-            </div>
-            <span style={{
-              fontSize: 10,
-              color: 'var(--sidebar-accent)',
-              fontFamily: 'var(--font-mono)',
-            }}>
-              847/s
+      {/* Stream health */}
+      <div className="border-t border-line px-4 pb-4 pt-3.5">
+        <div className="glass-soft rounded-xl px-3 py-2.5">
+          <div className="mb-2 flex items-center justify-between">
+            <span className="flex items-center gap-1.5 text-[11px] font-medium text-ink-2">
+              <span className="h-1.5 w-1.5 rounded-full bg-accent [animation:pulseSoft_2.4s_ease-in-out_infinite]" />
+              Stream live
             </span>
+            <span className="font-mono text-[10px] text-accent tnum">847/s</span>
           </div>
-
-          <div style={{ display: 'flex', alignItems: 'flex-end', gap: 2, height: 18 }}>
-            {[40, 55, 38, 62, 45, 50, 35, 48, 42, 38].map((h, i) => (
-              <div key={i} style={{
-                flex: 1,
-                height: `${h}%`,
-                background: h > 55
-                  ? 'rgba(180, 83, 9, 0.7)'
-                  : 'rgba(29, 184, 135, 0.5)',
-                borderRadius: 2,
-              }} />
+          <div className="flex h-[18px] items-end gap-0.5">
+            {BARS.map((h, i) => (
+              <motion.span
+                key={i}
+                className={`flex-1 rounded-sm ${h > 55 ? 'bg-high/70' : 'bg-accent/50'}`}
+                initial={{ height: 0 }}
+                animate={{ height: `${h}%` }}
+                transition={{ delay: 0.3 + i * 0.05, type: 'spring', stiffness: 200, damping: 22 }}
+              />
             ))}
           </div>
-          <div style={{ display: 'flex', justifyContent: 'space-between', marginTop: 5 }}>
-            <span style={{ fontSize: 9, color: 'rgba(255,255,255,0.20)' }}>Kafka lag</span>
-            <span style={{ fontSize: 9, color: 'rgba(255,255,255,0.35)', fontFamily: 'var(--font-mono)' }}>avg 42ms</span>
+          <div className="mt-1.5 flex justify-between text-[9px]">
+            <span className="text-ink-4">Kafka lag</span>
+            <span className="font-mono text-ink-3 tnum">avg 42ms</span>
           </div>
         </div>
       </div>
