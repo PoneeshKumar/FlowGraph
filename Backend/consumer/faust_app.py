@@ -14,6 +14,9 @@ from config import (
     TOPIC_WIRE_RAW,
 )
 from models.card_events import CardAuthEvent, CardSettlementEvent, EventType
+from models.wire_events import WireEvent
+from models.crypto_events import CryptoEvent, CryptoTxStatus
+from models.ach_events import ACHCreditEvent, ACHDebitEvent, ACHEventType
 from fx import to_usd_cents
 from db import postgres, neo4j, redis as redis_db
 
@@ -93,6 +96,16 @@ async def outbox_recovery():
         logger.exception("outbox recovery sweep failed")
 
 
+# ── Rail agents ─────────────────────────────────────────────────────────────
+# Each agent:
+#   1. Deserializes the raw bytes from its rail-specific topic
+#   2. Computes amount_usd_cents (canonical USD, required on BasePaymentEvent)
+#   3. Validates through the rail's Pydantic model
+#   4. Forwards the normalized event to payments.normalized keyed by sender_id
+#
+# Declined / failed events are still forwarded — the graph and compliance layer
+# need visibility into them. The status field on the event carries the outcome.
+
 @app.agent(card_raw_topic)
 async def process_card(stream):
     async for key, raw in stream.items():
@@ -102,7 +115,7 @@ async def process_card(stream):
             # validation since raw card payloads don't carry it
             data.setdefault(
                 "amount_usd_cents",
-                to_usd_cents(data["amount_cents"], data.get("currency", "CAD")),
+                to_usd_cents(data["amount_cents"], data.get("currency", "USD")),
             )
             if data.get("event_type") == EventType.AUTH.value:
                 event = CardAuthEvent.model_validate(data)
@@ -119,16 +132,71 @@ async def process_card(stream):
 @app.agent(ach_raw_topic)
 async def process_ach(stream):
     async for key, raw in stream.items():
-        logger.warning("ACH rail not yet implemented, dropping key=%r", key)
+        try:
+            data = json.loads(raw)
+            data.setdefault(
+                "amount_usd_cents",
+                to_usd_cents(data["amount_cents"], data.get("currency", "USD")),
+            )
+            # Route to credit or debit model based on ach_event_type discriminator
+            if data.get("ach_event_type") == ACHEventType.ACH_CREDIT.value:
+                event = ACHCreditEvent.model_validate(data)
+            else:
+                event = ACHDebitEvent.model_validate(data)
+            await normalized_topic.send(
+                key=event.sender_id.encode(),
+                value=event.model_dump_json().encode(),
+            )
+        except Exception:
+            logger.exception("ach processing failed, key=%r", key)
 
 
 @app.agent(wire_raw_topic)
 async def process_wire(stream):
     async for key, raw in stream.items():
-        logger.warning("WIRE rail not yet implemented, dropping key=%r", key)
+        try:
+            data = json.loads(raw)
+            data.setdefault(
+                "amount_usd_cents",
+                to_usd_cents(data["amount_cents"], data.get("currency", "USD")),
+            )
+            event = WireEvent.model_validate(data)
+            await normalized_topic.send(
+                key=event.sender_id.encode(),
+                value=event.model_dump_json().encode(),
+            )
+        except Exception:
+            logger.exception("wire processing failed, key=%r", key)
 
 
 @app.agent(crypto_raw_topic)
 async def process_crypto(stream):
     async for key, raw in stream.items():
-        logger.warning("CRYPTO rail not yet implemented, dropping key=%r", key)
+        try:
+            data = json.loads(raw)
+            # Crypto amounts are in native units (wei/satoshis) — FX stub
+            # treats them 1:1 for now. Real FX would need chain-aware pricing.
+            data.setdefault(
+                "amount_usd_cents",
+                to_usd_cents(data["amount_cents"], data.get("currency", "USD")),
+            )
+            event = CryptoEvent.model_validate(data)
+
+            # Only forward CONFIRMED and FAILED events to the normalized topic.
+            # PENDING events are broadcast state — they haven't settled yet and
+            # would create premature graph edges. The confirmation update that
+            # follows carries the same event_id so the Postgres dedup gate
+            # ensures exactly-once graph writes.
+            if event.crypto_status == CryptoTxStatus.PENDING:
+                logger.debug(
+                    "crypto PENDING — holding until confirmed, tx_ref=%s",
+                    event.tx_reference,
+                )
+                continue
+
+            await normalized_topic.send(
+                key=event.sender_id.encode(),
+                value=event.model_dump_json().encode(),
+            )
+        except Exception:
+            logger.exception("crypto processing failed, key=%r", key)
