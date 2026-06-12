@@ -1,0 +1,45 @@
+"""🟫 Ingestion Layer
+Payment Events
+This is the entry point — raw financial transactions coming in from four rails: ACH (bank-to-bank transfers), wire (large institutional transfers), card (Visa/Mastercard networks), and crypto (on-chain transactions). Each event is a structured payload containing sender, receiver, amount, currency, timestamp, and rail type. The key challenge here is that these events arrive from heterogeneous sources at different rates and formats, so they all need to be normalized into a single schema before anything downstream touches them.
+
+Kafka Topic
+Kafka acts as the durability and ordering layer. Every normalized payment event gets published to a Kafka topic. The critical property here is that messages are ordered within a partition — so if you partition by sender account ID, all transactions from the same sender arrive in order. Across partitions though, ordering isn't guaranteed, which the consumer has to handle. Kafka also gives you replay — if your consumer crashes, it can rewind and reprocess from any offset. This is what makes the ingestion layer fault-tolerant.
+
+Python Consumer (Faust · dual-write)
+Faust is a stream processing library that lets you write Kafka consumers as clean Python async code. The "dual-write" label is the most important detail here — for every message consumed, the worker writes to two places simultaneously: Postgres (canonical record) and Neo4j (graph edge). This dual-write is the source of the consistency problem the outbox pattern solves below.
+
+🟩 Storage Layer
+Postgres — Canonical Records · Outbox
+Postgres is the source of truth. Every transaction gets written here first as a complete, immutable record. It also holds the outbox table — a special table with a pending_graph_sync flag. When a transaction is written to Postgres, a row is also inserted into the outbox. A background worker reads pending outbox rows and writes them to Neo4j, then marks them as synced. This decouples the two writes so a Neo4j failure doesn't lose data.
+Neo4j — Nodes · Weighted Edges
+This is the core of the system. Neo4j stores the payment network as a property graph. Every account, merchant, bank, or exchange is a node with properties (KYC tier, risk score, country, volume). Every payment is a directed edge with properties (total amount, transaction count, first/last seen, average size). The edge weights accumulate over time — each new transaction between two nodes increments the edge weight rather than creating a new edge. This is what makes graph queries fast and meaningful: you can ask "show me all edges over $10k from flagged nodes" and get it in milliseconds.
+Redis — Time-Windowed ZSET
+Redis stores a sorted set (ZSET) for every edge in the graph, keyed as edge:{node_a}:{node_b}. Each entry in the sorted set is a transaction amount, scored by timestamp. To get the total volume between two accounts in the last 24 hours, you run a ZRANGEBYSCORE with a time range — this is a microsecond operation. This is how the system answers time-windowed questions ("how much moved between A and B in the last hour?") without doing expensive Neo4j aggregation queries.
+Outbox Pattern — Eventual Consistency
+The outbox pattern is the consistency bridge between Postgres and Neo4j. Instead of trying to write to both databases in a single atomic transaction (impossible across different DB systems), you write to Postgres first (always succeeds or rolls back cleanly), then a Celery worker picks up the pending graph sync and writes to Neo4j with retries and exponential backoff. The graph is always eventually consistent with Postgres, never ahead of it.
+
+🟥 Algorithm Layer
+Cycle Detection — DFS · 6-hop · 48h window
+This finds circular money flows — the classic money laundering pattern where money enters at node A, hops through intermediaries, and returns to A. The implementation runs a depth-first search starting from the sender of every new transaction, looking for a path back to itself within 6 hops and within a 48-hour time window. The depth limit exists for performance — without it, DFS on a graph with millions of nodes would be unusable. The time window ensures you're catching active laundering cycles, not historical coincidences. Running this only on nodes that just received a new edge (not the whole graph) is what keeps it real-time.
+Incremental PageRank — Hub + Centrality Score
+PageRank was invented to rank web pages by how many other pages link to them. Here it identifies hub accounts — nodes that receive money from many sources and send to many destinations. A legitimate payment processor looks like this, but so does a structuring node. The key word is "incremental" — instead of recomputing PageRank across the entire graph (expensive), you only recompute it for the local subgraph around any node that just received a new edge. The resulting centrality score becomes a node property that updates in near real-time.
+Louvain Clustering — Daily Batch · community_id
+Louvain is a community detection algorithm that groups densely-connected nodes into clusters. Unlike the other two algorithms, this one runs as a daily batch job on a full graph snapshot — it can't be made incremental because it needs a global view to find community boundaries. The output is a community_id assigned to every node. When a new fraud node is identified, every other node in its community gets an elevated risk flag automatically. This is how you catch accomplice accounts that haven't directly transacted with a known bad actor.
+Risk Flag Aggregator — Cycle · Hub · Community Risk
+This is the aggregation point where all three algorithm outputs converge. It takes the binary/scored signals from cycle detection, PageRank centrality, and Louvain community risk and combines them into a unified risk signal per account. This aggregated signal is what gets passed to the AI layer — not raw algorithm output, but a structured summary of what triggered and why.
+
+🟦 AI Layer
+Subgraph Summariser — get_subgraph() tool call
+Before calling the AI, the system needs to gather context. The get_subgraph() function fetches the relevant neighborhood of the flagged account from Neo4j — all nodes and edges within N hops, within a time window. It then formats this into a natural language description: "Account X received 14 transfers from 6 sources totaling $340k in 18 hours, then sent to 2 previously flagged accounts." This narrative is the input to the model.
+Claude API (in your case Gemini) — Risk · Confidence · Reason
+The subgraph summary plus raw graph metrics go into the model with a structured output schema. The model returns three things: a risk classification, a confidence score, and a plain-English explanation of its reasoning. This is non-gimmicky AI use — the model is doing genuine reasoning over a complex graph summary that would take a human analyst minutes to interpret. The structured output schema forces the response into a consistent, parseable format.
+Risk Classification — low / medium / high / critical
+The output of the AI call. Four tiers that map to operational responses: low gets logged, medium gets a review queue entry, high triggers an analyst alert, critical can trigger automatic transaction holds. The plain-English reason attached to each classification is what satisfies the regulatory requirement — financial institutions legally cannot freeze accounts based on a black-box score, they need documented human-readable reasoning.
+
+⬜ Query / UI Layer
+FastAPI — Cypher-over-HTTP
+The API layer exposes graph queries over HTTP. Operators can either write raw Cypher (Neo4j's query language) or use named query endpoints like shortest_path_between(a, b), subgraph_around(account_id, depth=3), or flow_between(a, b, window='7d'). FastAPI's async nature means it can handle many concurrent graph queries without blocking, which matters when the frontend is polling for live updates.
+D3 / Cytoscape.js — Live Force-Directed Graph
+The visual layer. A force-directed graph renders accounts as nodes and transactions as edges, with node color mapped to risk tier and edge thickness mapped to volume. It updates in real time as new transactions arrive via WebSocket from FastAPI. Clicking a node triggers a subgraph_around() call and expands the view. This is the interface where a fraud analyst actually works — spotting visual patterns in the graph that algorithms might miss.
+Compliance Report — Human-Readable Reasoning
+Every risk classification the AI produces gets rendered as a structured compliance report — account ID, timestamp, triggering signals, subgraph summary, AI reasoning, and classification. This is the audit trail. When a regulator asks "why did you flag this account?", this document is the answer. It's generated automatically for every high/critical flag with zero analyst effort."""
