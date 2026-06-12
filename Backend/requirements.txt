@@ -1,0 +1,25 @@
+# Faust stream processing framework
+faust==1.10.4
+robinhood-aiokafka==1.1.6
+
+# Data validation and models
+pydantic==2.8.2
+
+# Configuration management
+python-dotenv==1.0.1
+
+# Database drivers
+asyncpg==0.29.0
+neo4j==5.21.0
+redis==5.0.4
+
+# Web framework (included with Faust but explicit for clarity)
+aiohttp==3.10.1
+
+# Logging utilities
+python-json-logger==2.0.7
+
+# Testing
+pytest==8.2.2
+pytest-asyncio==0.23.8
+testcontainers==4.7.2
