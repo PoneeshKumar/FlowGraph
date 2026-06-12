@@ -66,10 +66,10 @@ const BARS = [40, 58, 36, 64, 47, 52, 33, 49, 61, 41]
 
 export default function Sidebar({ active, onNav, theme, onToggleTheme }) {
   return (
-    <aside className="glass-strong relative z-10 m-4 mr-0 flex w-[226px] shrink-0 flex-col self-stretch rounded-2xl">
+    <aside className="relative z-10 flex h-screen w-[218px] shrink-0 flex-col border-r border-line">
 
       {/* Wordmark */}
-      <div className="flex items-center gap-3 border-b border-line px-5 pb-4 pt-5">
+      <div className="flex items-center gap-3 px-5 pb-5 pt-6">
         <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-[10px] bg-accent/15 ring-1 ring-accent/30">
           <svg width="15" height="15" viewBox="0 0 14 14" fill="none">
             <circle cx="7" cy="7" r="2" fill="var(--accent)"/>
@@ -85,7 +85,7 @@ export default function Sidebar({ active, onNav, theme, onToggleTheme }) {
       </div>
 
       {/* Nav */}
-      <nav className="flex-1 px-3 pt-4">
+      <nav className="flex-1 px-3 pt-2">
         <div className="mb-2 px-2 text-[10px] font-bold uppercase tracking-[0.13em] text-ink-4">
           Workspace
         </div>
@@ -147,30 +147,28 @@ export default function Sidebar({ active, onNav, theme, onToggleTheme }) {
       </div>
 
       {/* Stream health */}
-      <div className="border-t border-line px-4 pb-4 pt-3.5">
-        <div className="glass-soft rounded-xl px-3 py-2.5">
-          <div className="mb-2 flex items-center justify-between">
-            <span className="flex items-center gap-1.5 text-[11px] font-medium text-ink-2">
-              <span className="h-1.5 w-1.5 rounded-full bg-accent [animation:pulseSoft_2.4s_ease-in-out_infinite]" />
-              Stream live
-            </span>
-            <span className="font-mono text-[10px] text-accent tnum">847/s</span>
-          </div>
-          <div className="flex h-[18px] items-end gap-0.5">
-            {BARS.map((h, i) => (
-              <motion.span
-                key={i}
-                className={`flex-1 rounded-sm ${h > 55 ? 'bg-high/70' : 'bg-accent/50'}`}
-                initial={{ height: 0 }}
-                animate={{ height: `${h}%` }}
-                transition={{ delay: 0.3 + i * 0.05, type: 'spring', stiffness: 200, damping: 22 }}
-              />
-            ))}
-          </div>
-          <div className="mt-1.5 flex justify-between text-[9px]">
-            <span className="text-ink-4">Kafka lag</span>
-            <span className="font-mono text-ink-3 tnum">avg 42ms</span>
-          </div>
+      <div className="border-t border-line px-5 pb-5 pt-4">
+        <div className="mb-2 flex items-center justify-between">
+          <span className="flex items-center gap-1.5 text-[11px] font-medium text-ink-2">
+            <span className="h-1.5 w-1.5 rounded-full bg-accent [animation:pulseSoft_2.4s_ease-in-out_infinite]" />
+            Stream live
+          </span>
+          <span className="font-mono text-[10px] text-accent tnum">847/s</span>
+        </div>
+        <div className="flex h-[18px] items-end gap-0.5">
+          {BARS.map((h, i) => (
+            <motion.span
+              key={i}
+              className={`flex-1 rounded-sm ${h > 55 ? 'bg-high/70' : 'bg-accent/50'}`}
+              initial={{ height: 0 }}
+              animate={{ height: `${h}%` }}
+              transition={{ delay: 0.3 + i * 0.05, type: 'spring', stiffness: 200, damping: 22 }}
+            />
+          ))}
+        </div>
+        <div className="mt-1.5 flex justify-between text-[9px]">
+          <span className="text-ink-4">Kafka lag</span>
+          <span className="font-mono text-ink-3 tnum">avg 42ms</span>
         </div>
       </div>
     </aside>

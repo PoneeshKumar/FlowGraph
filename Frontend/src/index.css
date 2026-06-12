@@ -1,27 +1,24 @@
 @import "tailwindcss";
 
 /* ────────────────────────────────────────────────────────────────────────────
-   FlowGraph — "Liquid Glass Ledger" design system
-   A formal, analytical surface for financial network intelligence.
-   Frosted glass panels float over a slow-moving aurora of market light.
+   FlowGraph — "Liquid Glass Ledger" design system, v2
+   One continuous sheet of glass. Structure comes from hairlines and
+   typography, not boxes. Color is reserved for data (risk, status, flow).
    ──────────────────────────────────────────────────────────────────────────── */
 
 :root {
   /* ── Canvas ── */
-  --bg-base: #060a13;
+  --bg-base: #070b14;
 
-  /* ── Aurora (background light field) ── */
-  --aurora-1: rgba(34, 211, 168, 0.16);   /* mint  */
-  --aurora-2: rgba(56, 97, 251, 0.14);    /* indigo */
-  --aurora-3: rgba(212, 175, 105, 0.07);  /* champagne */
+  /* ── Backdrop tint (barely-there, static) ── */
+  --tint-1: rgba(63, 217, 164, 0.045);
+  --tint-2: rgba(76, 110, 245, 0.04);
 
-  /* ── Glass ── */
-  --glass-bg:        rgba(255, 255, 255, 0.045);
-  --glass-bg-soft:   rgba(255, 255, 255, 0.025);
-  --glass-bg-strong: rgba(13, 19, 33, 0.62);
-  --glass-border:    rgba(255, 255, 255, 0.08);
-  --glass-highlight: rgba(255, 255, 255, 0.10);
-  --glass-shadow:    rgba(2, 6, 16, 0.45);
+  /* ── Glass (floating overlays only) ── */
+  --glass-bg:        rgba(255, 255, 255, 0.03);
+  --glass-bg-strong: rgba(11, 16, 28, 0.78);
+  --glass-border:    rgba(255, 255, 255, 0.07);
+  --glass-shadow:    rgba(2, 6, 16, 0.5);
 
   /* ── Ink ── */
   --ink:   #e9eef7;
@@ -30,8 +27,8 @@
   --ink-4: #46536b;
 
   /* ── Hairlines ── */
-  --line:        rgba(255, 255, 255, 0.07);
-  --line-strong: rgba(255, 255, 255, 0.14);
+  --line:        rgba(255, 255, 255, 0.06);
+  --line-strong: rgba(255, 255, 255, 0.13);
 
   /* ── Brand accent — settlement mint ── */
   --accent:      #3fd9a4;
@@ -44,30 +41,27 @@
   --low:      #3fd9a4;
 
   /* ── Hover wash ── */
-  --hover: rgba(255, 255, 255, 0.05);
+  --hover: rgba(255, 255, 255, 0.04);
 }
 
 [data-theme="light"] {
-  --bg-base: #e8ecf3;
+  --bg-base: #eef1f6;
 
-  --aurora-1: rgba(34, 211, 168, 0.20);
-  --aurora-2: rgba(56, 97, 251, 0.13);
-  --aurora-3: rgba(212, 175, 105, 0.12);
+  --tint-1: rgba(34, 211, 168, 0.07);
+  --tint-2: rgba(76, 110, 245, 0.05);
 
-  --glass-bg:        rgba(255, 255, 255, 0.55);
-  --glass-bg-soft:   rgba(255, 255, 255, 0.35);
-  --glass-bg-strong: rgba(255, 255, 255, 0.78);
-  --glass-border:    rgba(20, 33, 56, 0.10);
-  --glass-highlight: rgba(255, 255, 255, 0.85);
-  --glass-shadow:    rgba(28, 41, 66, 0.14);
+  --glass-bg:        rgba(255, 255, 255, 0.5);
+  --glass-bg-strong: rgba(255, 255, 255, 0.85);
+  --glass-border:    rgba(20, 33, 56, 0.09);
+  --glass-shadow:    rgba(28, 41, 66, 0.16);
 
   --ink:   #131c2b;
   --ink-2: #3e4d66;
   --ink-3: #71809a;
   --ink-4: #a4b0c4;
 
-  --line:        rgba(20, 33, 56, 0.09);
-  --line-strong: rgba(20, 33, 56, 0.18);
+  --line:        rgba(20, 33, 56, 0.08);
+  --line-strong: rgba(20, 33, 56, 0.17);
 
   --accent:      #0d9d72;
   --accent-deep: #0a8761;
@@ -77,7 +71,7 @@
   --medium:   #9c7c14;
   --low:      #0d9d72;
 
-  --hover: rgba(20, 33, 56, 0.045);
+  --hover: rgba(20, 33, 56, 0.04);
 }
 
 /* Map runtime tokens into Tailwind utility namespace */
@@ -103,37 +97,24 @@
 
   --radius-md: 0.625rem;
   --radius-lg: 1rem;
-  --radius-xl: 1.375rem;
 
   --ease-fluid: cubic-bezier(0.32, 0.72, 0, 1);
 }
 
-/* ── Glass panels ── */
+/* ── Glass — reserved for floating overlays (panels over the graph, menus) ── */
 @utility glass {
-  background: var(--glass-bg);
-  -webkit-backdrop-filter: blur(22px) saturate(150%);
-  backdrop-filter: blur(22px) saturate(150%);
+  background: var(--glass-bg-strong);
+  -webkit-backdrop-filter: blur(20px) saturate(140%);
+  backdrop-filter: blur(20px) saturate(140%);
   border: 1px solid var(--glass-border);
-  box-shadow:
-    inset 0 1px 0 0 var(--glass-highlight),
-    0 12px 36px -12px var(--glass-shadow);
+  box-shadow: 0 16px 48px -16px var(--glass-shadow);
 }
 
 @utility glass-soft {
-  background: var(--glass-bg-soft);
-  -webkit-backdrop-filter: blur(14px) saturate(130%);
-  backdrop-filter: blur(14px) saturate(130%);
+  background: var(--glass-bg);
+  -webkit-backdrop-filter: blur(12px);
+  backdrop-filter: blur(12px);
   border: 1px solid var(--glass-border);
-}
-
-@utility glass-strong {
-  background: var(--glass-bg-strong);
-  -webkit-backdrop-filter: blur(28px) saturate(160%);
-  backdrop-filter: blur(28px) saturate(160%);
-  border: 1px solid var(--glass-border);
-  box-shadow:
-    inset 0 1px 0 0 var(--glass-highlight),
-    0 24px 64px -16px var(--glass-shadow);
 }
 
 /* Tabular figures for all financial data */
@@ -187,62 +168,25 @@ input { font-family: inherit; }
 }
 ::-webkit-scrollbar-thumb:hover { background: var(--ink-3); }
 
-/* ── Aurora background field ── */
-.aurora {
+/* ── Backdrop — one quiet wash of light, no moving parts ── */
+.backdrop {
   position: fixed;
   inset: 0;
   z-index: 0;
-  overflow: hidden;
   pointer-events: none;
+  background:
+    radial-gradient(120vw 85vh at 10% -12%, var(--tint-1), transparent 62%),
+    radial-gradient(95vw 75vh at 108% 112%, var(--tint-2), transparent 60%);
 }
 
-.aurora::after {
-  /* fine grain so the glass has something to refract */
+.backdrop::after {
+  /* fine grain so large flat areas don't band */
   content: "";
   position: absolute;
   inset: 0;
   background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='160' height='160'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='2'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)' opacity='0.5'/%3E%3C/svg%3E");
-  opacity: 0.035;
+  opacity: 0.03;
   mix-blend-mode: overlay;
-}
-
-.aurora-orb {
-  position: absolute;
-  border-radius: 50%;
-  filter: blur(90px);
-  will-change: transform;
-}
-
-.aurora-orb-1 {
-  width: 56vw; height: 56vw;
-  left: -12vw; top: -18vw;
-  background: radial-gradient(circle at 35% 35%, var(--aurora-1), transparent 65%);
-  animation: drift-1 26s ease-in-out infinite alternate;
-}
-.aurora-orb-2 {
-  width: 48vw; height: 48vw;
-  right: -14vw; top: 10vh;
-  background: radial-gradient(circle at 60% 40%, var(--aurora-2), transparent 65%);
-  animation: drift-2 32s ease-in-out infinite alternate;
-}
-.aurora-orb-3 {
-  width: 40vw; height: 40vw;
-  left: 28vw; bottom: -16vw;
-  background: radial-gradient(circle at 50% 50%, var(--aurora-3), transparent 65%);
-  animation: drift-3 38s ease-in-out infinite alternate;
-}
-
-@keyframes drift-1 {
-  from { transform: translate(0, 0) scale(1); }
-  to   { transform: translate(9vw, 7vh) scale(1.12); }
-}
-@keyframes drift-2 {
-  from { transform: translate(0, 0) scale(1.05); }
-  to   { transform: translate(-8vw, -6vh) scale(0.95); }
-}
-@keyframes drift-3 {
-  from { transform: translate(0, 0) scale(1); }
-  to   { transform: translate(-6vw, -8vh) scale(1.1); }
 }
 
 /* ── Shared motion ── */
@@ -259,7 +203,6 @@ input { font-family: inherit; }
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .aurora-orb { animation: none; }
   *, *::before, *::after {
     animation-duration: 0.01ms !important;
     transition-duration: 0.01ms !important;

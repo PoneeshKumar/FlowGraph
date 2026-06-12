@@ -86,9 +86,9 @@ export function useCountUp(value, duration = 900, delay = 0) {
 
 export function PageHeader({ title, subtitle, children }) {
   return (
-    <header className="glass z-10 mx-4 mt-4 flex shrink-0 items-center justify-between gap-4 rounded-xl px-6 py-4">
+    <header className="z-10 flex shrink-0 items-center justify-between gap-4 border-b border-line px-7 py-4">
       <div className="min-w-0">
-        <h1 className="font-display text-[21px] font-medium tracking-tight text-ink">{title}</h1>
+        <h1 className="font-display text-[20px] font-medium tracking-tight text-ink">{title}</h1>
         {subtitle && <div className="mt-0.5 text-xs text-ink-3">{subtitle}</div>}
       </div>
       {children && <div className="flex shrink-0 items-center gap-2">{children}</div>}
