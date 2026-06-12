@@ -1,5 +1,7 @@
 import { useState } from 'react'
+import { motion, AnimatePresence } from 'motion/react'
 import { RECENT_ALERTS } from '../data/mockData'
+import { RISK_VAR, PageHeader } from './ui'
 
 const MORE_ALERTS = [
   ...RECENT_ALERTS,
@@ -17,12 +19,13 @@ const MORE_ALERTS = [
   },
 ]
 
-const RISK_MAP = {
-  critical: { color: 'var(--risk-critical)', bg: 'var(--risk-critical-bg)', border: 'var(--risk-critical-border)' },
-  high:     { color: 'var(--risk-high)',     bg: 'var(--risk-high-bg)',     border: 'var(--risk-high-border)'     },
-  medium:   { color: 'var(--risk-medium)',   bg: 'var(--risk-medium-bg)',   border: 'var(--risk-medium-border)'   },
-  low:      { color: 'var(--risk-low)',      bg: 'var(--risk-low-bg)',      border: 'var(--risk-low-border)'      },
-}
+const FILTERS = ['all', 'critical', 'high', 'medium', 'low']
+
+const ACTIONS = [
+  { label: 'Freeze Account',         tone: 'border-critical/30 bg-critical/10 text-critical hover:bg-critical/20' },
+  { label: 'Escalate to Compliance', tone: 'border-high/30 bg-high/10 text-high hover:bg-high/20' },
+  { label: 'Mark False Positive',    tone: 'border-line bg-hover text-ink-2 hover:bg-line' },
+]
 
 export default function AlertsView() {
   const [selected, setSelected] = useState(null)
@@ -32,256 +35,172 @@ export default function AlertsView() {
   const counts = MORE_ALERTS.reduce((acc, a) => { acc[a.severity] = (acc[a.severity] || 0) + 1; return acc }, {})
 
   return (
-    <div style={{ flex: 1, display: 'flex', flexDirection: 'column', height: '100vh', overflow: 'auto', background: 'var(--bg-base)' }}>
+    <div className="flex h-full flex-col overflow-hidden">
+      <PageHeader title="Risk Alerts" subtitle="AI-generated explanations for every flag">
+        <button className="glass-soft flex items-center gap-2 rounded-lg px-3.5 py-2 text-xs font-medium text-ink-2 transition-colors duration-200 hover:text-ink">
+          <svg width="12" height="12" viewBox="0 0 12 12" fill="none">
+            <path d="M2 9.5h8M2 6h8M2 2.5h8" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round"/>
+          </svg>
+          Export Report
+        </button>
+      </PageHeader>
 
-      {/* Header */}
-      <div style={{
-        padding: '24px 28px 0',
-        background: 'var(--bg-card)',
-        borderBottom: '1px solid var(--border)',
-        boxShadow: 'var(--shadow-sm)',
-      }}>
-        <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', marginBottom: 16 }}>
-          <div>
-            <h1 style={{ fontFamily: 'var(--font-display)', fontSize: 20, fontWeight: 700, color: 'var(--text-primary)', letterSpacing: '-0.3px', marginBottom: 3 }}>
-              Risk Alerts
-            </h1>
-            <div style={{ fontSize: 12, color: 'var(--text-muted)' }}>
-              AI-generated explanations for every flag
-            </div>
-          </div>
-          <button style={{
-            padding: '7px 14px', fontSize: 12, fontWeight: 500,
-            background: 'var(--bg-subtle)', border: '1px solid var(--border)',
-            borderRadius: 'var(--radius-sm)', color: 'var(--text-secondary)',
-            display: 'flex', alignItems: 'center', gap: 6,
-          }}>
-            <svg width="12" height="12" viewBox="0 0 12 12" fill="none">
-              <path d="M2 9.5h8M2 6h8M2 2.5h8" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round"/>
-            </svg>
-            Export Report
-          </button>
-        </div>
-
-        {/* Filter tabs */}
-        <div style={{ display: 'flex', gap: 0, borderBottom: '1px solid var(--border)', marginBottom: -1 }}>
-          {[
-            ['all',      'All',      MORE_ALERTS.length, 'var(--text-primary)'],
-            ['critical', 'Critical', counts.critical || 0, 'var(--risk-critical)'],
-            ['high',     'High',     counts.high || 0,     'var(--risk-high)'],
-            ['medium',   'Medium',   counts.medium || 0,   'var(--risk-medium)'],
-            ['low',      'Low',      counts.low || 0,      'var(--risk-low)'],
-          ].map(([f, label, count, color]) => {
-            const isActive = filter === f
-            return (
-              <button
-                key={f}
-                onClick={() => setFilter(f)}
-                style={{
-                  padding: '9px 16px',
-                  fontSize: 12, fontWeight: isActive ? 600 : 400,
-                  color: isActive ? color : 'var(--text-muted)',
-                  background: 'transparent',
-                  border: 'none',
-                  borderBottom: isActive ? `2px solid ${color}` : '2px solid transparent',
-                  display: 'flex', alignItems: 'center', gap: 6,
-                  transition: 'all 0.13s',
-                  marginBottom: -1,
-                }}
-              >
-                {label}
-                <span style={{
-                  fontSize: 10, fontFamily: 'var(--font-mono)',
-                  background: isActive ? RISK_MAP[f]?.bg || 'var(--bg-subtle)' : 'var(--bg-subtle)',
-                  color: isActive ? color : 'var(--text-faint)',
-                  border: `1px solid ${isActive ? RISK_MAP[f]?.border || 'var(--border)' : 'var(--border)'}`,
-                  padding: '1px 5px', borderRadius: 99,
-                }}>
-                  {count}
-                </span>
-              </button>
-            )
-          })}
-        </div>
+      {/* Filter tabs */}
+      <div className="mx-4 mt-3 flex gap-1">
+        {FILTERS.map(f => {
+          const isActive = filter === f
+          const count = f === 'all' ? MORE_ALERTS.length : counts[f] || 0
+          const color = f === 'all' ? 'var(--ink)' : RISK_VAR[f]
+          return (
+            <button
+              key={f}
+              onClick={() => setFilter(f)}
+              className={`relative flex items-center gap-1.5 rounded-full px-3.5 py-1.5 text-xs capitalize transition-colors duration-200
+                ${isActive ? 'font-semibold' : 'text-ink-3 hover:text-ink-2'}`}
+              style={isActive ? { color } : undefined}
+            >
+              {isActive && (
+                <motion.span
+                  layoutId="alert-filter-pill"
+                  className="glass absolute inset-0 rounded-full"
+                  transition={{ type: 'spring', stiffness: 420, damping: 34 }}
+                />
+              )}
+              <span className="relative z-[1]">{f}</span>
+              <span className="relative z-[1] font-mono text-[10px] tnum opacity-70">{count}</span>
+            </button>
+          )
+        })}
       </div>
 
-      {/* Content */}
-      <div style={{ padding: '22px 28px', flex: 1 }}>
-        <div style={{
-          display: 'grid',
-          gridTemplateColumns: selected ? '1fr 360px' : '1fr',
-          gap: 18, alignItems: 'start',
-        }}>
-
+      <div className="flex-1 overflow-y-auto p-4">
+        <div className={`grid items-start gap-4 ${selected ? 'grid-cols-[1fr_352px]' : 'grid-cols-1'}`}>
           {/* List */}
           <div>
-            {filtered.map((alert, i) => {
-              const s = RISK_MAP[alert.severity]
-              const isSelected = selected?.id === alert.id
-              return (
-                <div
-                  key={alert.id}
-                  onClick={() => setSelected(prev => prev?.id === alert.id ? null : alert)}
-                  style={{
-                    background: isSelected ? s.bg : 'var(--bg-card)',
-                    border: `1px solid ${isSelected ? s.border : 'var(--border)'}`,
-                    borderLeft: `3px solid ${isSelected ? s.color : 'transparent'}`,
-                    borderRadius: 'var(--radius)',
-                    padding: '16px 18px',
-                    marginBottom: 10,
-                    cursor: 'pointer',
-                    transition: 'all 0.13s',
-                    boxShadow: 'var(--shadow-sm)',
-                    animation: `fadeSlideIn 0.28s ease ${i * 45}ms both`,
-                  }}
-                  onMouseEnter={e => { if (!isSelected) { e.currentTarget.style.background = 'var(--bg-hover)'; e.currentTarget.style.borderLeftColor = s.color + '60' } }}
-                  onMouseLeave={e => { if (!isSelected) { e.currentTarget.style.background = 'var(--bg-card)'; e.currentTarget.style.borderLeftColor = 'transparent' } }}
-                >
-                  <div style={{ display: 'flex', alignItems: 'flex-start', gap: 14 }}>
-                    {/* Severity dot container */}
-                    <div style={{
-                      width: 34, height: 34, borderRadius: 8, flexShrink: 0,
-                      background: s.bg, border: `1px solid ${s.border}`,
-                      display: 'flex', alignItems: 'center', justifyContent: 'center',
-                    }}>
-                      <div style={{ width: 9, height: 9, borderRadius: '50%', background: s.color }} />
-                    </div>
-
-                    <div style={{ flex: 1, minWidth: 0 }}>
-                      <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 4 }}>
-                        <span style={{
-                          fontSize: 10, fontWeight: 700, textTransform: 'uppercase',
-                          letterSpacing: '0.07em', color: s.color,
-                        }}>
-                          {alert.severity}
-                        </span>
-                        <span style={{
-                          fontFamily: 'var(--font-display)', fontSize: 13, fontWeight: 600,
-                          color: 'var(--text-primary)',
-                        }}>
-                          {alert.type}
-                        </span>
-                        <span style={{ marginLeft: 'auto', fontSize: 10, color: 'var(--text-faint)', fontFamily: 'var(--font-mono)', whiteSpace: 'nowrap' }}>
-                          {alert.id}
-                        </span>
+            <AnimatePresence initial={false} mode="popLayout">
+              {filtered.map((alert, i) => {
+                const color = RISK_VAR[alert.severity]
+                const isSelected = selected?.id === alert.id
+                return (
+                  <motion.div
+                    key={alert.id}
+                    layout
+                    initial={{ opacity: 0, y: 12 }}
+                    animate={{ opacity: 1, y: 0 }}
+                    exit={{ opacity: 0, scale: 0.97 }}
+                    transition={{ duration: 0.32, delay: i * 0.035, ease: [0.32, 0.72, 0, 1] }}
+                    onClick={() => setSelected(prev => (prev?.id === alert.id ? null : alert))}
+                    className={`glass mb-2.5 cursor-pointer rounded-xl px-4.5 py-4 transition-all duration-200 hover:-translate-y-px
+                      ${isSelected ? 'ring-1' : ''}`}
+                    style={{
+                      borderLeft: `2px solid ${isSelected ? color : 'transparent'}`,
+                      ...(isSelected ? { ringColor: `color-mix(in oklab, ${color} 40%, transparent)` } : {}),
+                    }}
+                  >
+                    <div className="flex items-start gap-3.5">
+                      <div
+                        className="flex h-9 w-9 shrink-0 items-center justify-center rounded-[10px] border"
+                        style={{
+                          borderColor: `color-mix(in oklab, ${color} 30%, transparent)`,
+                          background: `color-mix(in oklab, ${color} 10%, transparent)`,
+                        }}
+                      >
+                        <span className="h-2 w-2 rounded-full" style={{ background: color }} />
                       </div>
 
-                      <div style={{ fontSize: 13, color: 'var(--text-secondary)', lineHeight: 1.5, marginBottom: 10 }}>
-                        {alert.message}
-                      </div>
-
-                      <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-                        <span style={{
-                          fontSize: 11, fontFamily: 'var(--font-mono)',
-                          background: 'var(--bg-subtle)', border: '1px solid var(--border)',
-                          padding: '2px 7px', borderRadius: 3, color: 'var(--text-secondary)',
-                        }}>{alert.account}</span>
-                        <span style={{ fontSize: 11, fontFamily: 'var(--font-mono)', fontWeight: 700, color: 'var(--text-primary)' }}>
-                          ${(alert.amount / 1000).toFixed(0)}K
-                        </span>
-                        <span style={{ fontSize: 11, color: 'var(--text-faint)' }}>·</span>
-                        <span style={{ fontSize: 11, color: s.color }}>
-                          {alert.confidence}% confidence
-                        </span>
-                        <span style={{ marginLeft: 'auto', fontSize: 11, color: 'var(--text-faint)' }}>
-                          {alert.timestamp}
-                        </span>
+                      <div className="min-w-0 flex-1">
+                        <div className="mb-1 flex items-center gap-2">
+                          <span className="text-[10px] font-bold uppercase tracking-[0.08em]" style={{ color }}>
+                            {alert.severity}
+                          </span>
+                          <span className="font-display text-[13.5px] font-medium text-ink">{alert.type}</span>
+                          <span className="ml-auto whitespace-nowrap font-mono text-[10px] text-ink-4">{alert.id}</span>
+                        </div>
+                        <div className="mb-2.5 text-[13px] leading-normal text-ink-2">{alert.message}</div>
+                        <div className="flex items-center gap-2.5">
+                          <span className="rounded border border-line bg-hover px-1.5 py-px font-mono text-[11px] text-ink-2">
+                            {alert.account}
+                          </span>
+                          <span className="font-mono text-[11px] font-bold text-ink tnum">
+                            ${(alert.amount / 1000).toFixed(0)}K
+                          </span>
+                          <span className="text-[11px] text-ink-4">·</span>
+                          <span className="text-[11px] tnum" style={{ color }}>{alert.confidence}% confidence</span>
+                          <span className="ml-auto text-[11px] text-ink-4">{alert.timestamp}</span>
+                        </div>
                       </div>
                     </div>
-                  </div>
-                </div>
-              )
-            })}
+                  </motion.div>
+                )
+              })}
+            </AnimatePresence>
           </div>
 
           {/* Detail panel */}
-          {selected && (() => {
-            const s = RISK_MAP[selected.severity]
-            return (
-              <div style={{
-                background: 'var(--bg-card)',
-                border: '1px solid var(--border)',
-                borderTop: `3px solid ${s.color}`,
-                borderRadius: 'var(--radius)',
-                padding: '20px',
-                position: 'sticky', top: 22,
-                boxShadow: 'var(--shadow-md)',
-                animation: 'fadeSlideIn 0.18s ease',
-              }}>
-                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 16 }}>
-                  <div>
-                    <div style={{ fontSize: 10, color: 'var(--text-faint)', fontFamily: 'var(--font-mono)', marginBottom: 4 }}>
-                      {selected.id}
+          <AnimatePresence>
+            {selected && (() => {
+              const color = RISK_VAR[selected.severity]
+              return (
+                <motion.aside
+                  key={selected.id}
+                  initial={{ opacity: 0, x: 28, filter: 'blur(4px)' }}
+                  animate={{ opacity: 1, x: 0, filter: 'blur(0px)' }}
+                  exit={{ opacity: 0, x: 28, filter: 'blur(4px)' }}
+                  transition={{ duration: 0.3, ease: [0.32, 0.72, 0, 1] }}
+                  className="glass-strong sticky top-0 rounded-xl p-5"
+                  style={{ borderTop: `2px solid ${color}` }}
+                >
+                  <div className="mb-4 flex items-start justify-between">
+                    <div>
+                      <div className="mb-1 font-mono text-[10px] text-ink-4">{selected.id}</div>
+                      <div className="font-display text-[17px] font-medium text-ink">{selected.type}</div>
                     </div>
-                    <div style={{ fontFamily: 'var(--font-display)', fontSize: 16, fontWeight: 700, color: 'var(--text-primary)' }}>
-                      {selected.type}
-                    </div>
-                  </div>
-                  <button onClick={() => setSelected(null)} style={{
-                    width: 22, height: 22, borderRadius: '50%',
-                    background: 'var(--bg-subtle)', border: '1px solid var(--border)',
-                    color: 'var(--text-muted)', display: 'flex',
-                    alignItems: 'center', justifyContent: 'center', fontSize: 14,
-                  }}>×</button>
-                </div>
-
-                {/* Confidence bar */}
-                <div style={{ marginBottom: 16 }}>
-                  <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 6 }}>
-                    <span style={{ fontSize: 11, color: 'var(--text-muted)' }}>AI Confidence</span>
-                    <span style={{ fontFamily: 'var(--font-mono)', fontSize: 12, fontWeight: 700, color: s.color }}>
-                      {selected.confidence}%
-                    </span>
-                  </div>
-                  <div style={{ height: 4, background: 'var(--border)', borderRadius: 99 }}>
-                    <div style={{
-                      height: '100%', width: `${selected.confidence}%`,
-                      background: s.color, borderRadius: 99,
-                      transition: 'width 0.5s ease',
-                    }} />
-                  </div>
-                </div>
-
-                {/* AI explanation */}
-                <div style={{
-                  padding: '12px 14px', marginBottom: 16,
-                  background: 'var(--bg-subtle)',
-                  border: '1px solid var(--border)',
-                  borderLeft: `3px solid ${s.color}`,
-                  borderRadius: 'var(--radius-sm)',
-                }}>
-                  <div style={{ fontSize: 10, fontWeight: 600, color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.07em', marginBottom: 6 }}>
-                    AI Analysis
-                  </div>
-                  <div style={{ fontSize: 12.5, color: 'var(--text-secondary)', lineHeight: 1.7 }}>
-                    {selected.aiExplanation}
-                  </div>
-                </div>
-
-                {/* Actions */}
-                <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
-                  {[
-                    { label: 'Freeze Account',         color: 'var(--risk-critical)', bg: 'var(--risk-critical-bg)', border: 'var(--risk-critical-border)' },
-                    { label: 'Escalate to Compliance', color: 'var(--risk-high)',     bg: 'var(--risk-high-bg)',     border: 'var(--risk-high-border)'     },
-                    { label: 'Mark False Positive',    color: 'var(--text-secondary)',bg: 'var(--bg-subtle)',        border: 'var(--border)'               },
-                  ].map(btn => (
-                    <button key={btn.label} style={{
-                      padding: '8px 14px', borderRadius: 'var(--radius-sm)',
-                      background: btn.bg, border: `1px solid ${btn.border}`,
-                      color: btn.color, fontSize: 12, fontWeight: 500,
-                      textAlign: 'left', transition: 'opacity 0.13s',
-                      letterSpacing: '-0.1px',
-                    }}
-                    onMouseEnter={e => e.currentTarget.style.opacity = '0.75'}
-                    onMouseLeave={e => e.currentTarget.style.opacity = '1'}
+                    <button
+                      onClick={() => setSelected(null)}
+                      className="flex h-[22px] w-[22px] items-center justify-center rounded-full border border-line bg-hover text-sm text-ink-3 transition-colors hover:text-ink"
                     >
-                      {btn.label}
+                      ×
                     </button>
-                  ))}
-                </div>
-              </div>
-            )
-          })()}
+                  </div>
+
+                  {/* Confidence */}
+                  <div className="mb-4">
+                    <div className="mb-1.5 flex justify-between">
+                      <span className="text-[11px] text-ink-3">AI Confidence</span>
+                      <span className="font-mono text-xs font-bold tnum" style={{ color }}>{selected.confidence}%</span>
+                    </div>
+                    <div className="h-1 overflow-hidden rounded-full bg-line">
+                      <motion.div
+                        className="h-full rounded-full"
+                        style={{ background: color }}
+                        initial={{ width: 0 }}
+                        animate={{ width: `${selected.confidence}%` }}
+                        transition={{ duration: 0.7, ease: [0.32, 0.72, 0, 1], delay: 0.15 }}
+                      />
+                    </div>
+                  </div>
+
+                  {/* AI explanation */}
+                  <div className="mb-4 rounded-lg border border-line bg-hover px-3.5 py-3" style={{ borderLeft: `2px solid ${color}` }}>
+                    <div className="mb-1.5 text-[10px] font-bold uppercase tracking-[0.1em] text-ink-3">AI Analysis</div>
+                    <div className="text-[12.5px] leading-[1.7] text-ink-2">{selected.aiExplanation}</div>
+                  </div>
+
+                  {/* Actions */}
+                  <div className="flex flex-col gap-1.5">
+                    {ACTIONS.map(btn => (
+                      <button
+                        key={btn.label}
+                        className={`rounded-lg border px-3.5 py-2 text-left text-xs font-medium tracking-tight transition-colors duration-200 ${btn.tone}`}
+                      >
+                        {btn.label}
+                      </button>
+                    ))}
+                  </div>
+                </motion.aside>
+              )
+            })()}
+          </AnimatePresence>
         </div>
       </div>
     </div>
