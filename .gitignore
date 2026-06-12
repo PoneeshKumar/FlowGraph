@@ -1,0 +1,9 @@
+# Virtual environments (repo root — Backend/.gitignore covers Backend/.venv)
+.venv/
+venv/
+env/
+
+# Root .env for docker compose (copy from Backend/.env or .env.example)
+.env
+.env.local
+.env.*.local

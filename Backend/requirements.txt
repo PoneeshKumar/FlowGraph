@@ -9,6 +9,7 @@ pydantic==2.8.2
 python-dotenv==1.0.1
 
 # Database drivers
+asyncpg==0.29.0
 neo4j==5.21.0
 redis==5.0.4
 
@@ -18,6 +19,7 @@ aiohttp==3.10.1
 # Logging utilities
 python-json-logger==2.0.7
 
-# Note: psycopg2-binary omitted (requires PostgreSQL dev libs)
-# Install separately if needed: pip install psycopg2-binary
-# Or use: brew install postgresql
+# Testing
+pytest==8.2.2
+pytest-asyncio==0.23.8
+testcontainers==4.7.2

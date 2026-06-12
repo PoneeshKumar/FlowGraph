@@ -153,9 +153,11 @@ class CardSettlementEvent(BasePaymentEvent):
 
     @field_validator("settled_at_utc", mode="before")
     @classmethod
-    def enforcu_utc(cls, v: Any) -> datetime:
-        if isinstance(v, datetime) and v.tzinfo is None:
-            raise ValueError("settled at utc must be timezone aware (UTC)")
+    def enforce_settled_utc(cls, v: Any) -> datetime:
+        if isinstance(v, datetime):
+            if v.tzinfo is None:
+                raise ValueError("settled_at_utc must be timezone-aware (UTC).")
+            return v.astimezone(timezone.utc)
         return v
 
     

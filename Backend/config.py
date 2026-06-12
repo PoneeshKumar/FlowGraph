@@ -1,4 +1,9 @@
 import os
+from pathlib import Path
+
+from dotenv import load_dotenv
+
+load_dotenv(Path(__file__).resolve().parent / ".env")
 
 KAFKA_BROKER = os.getenv("KAFKA_BROKER", "kafka://localhost:9092")
 
