@@ -88,6 +88,17 @@ export const RECENT_ALERTS = [
     confidence: 71,
     aiExplanation: 'Louvain community detection placed EXC-9017 in the same cluster as 3 accounts with existing fraud flags. Elevated risk by association.',
   },
+  {
+    id: 'ALT-006',
+    severity: 'medium',
+    type: 'Dormant Account Reactivation',
+    message: 'ACC-1129 moved $42K after 14 months idle',
+    account: 'ACC-1129',
+    amount: 42000,
+    timestamp: '1 hr ago',
+    confidence: 68,
+    aiExplanation: 'Account dormant since Feb 2025 suddenly initiated a card-funded transfer to a merchant with prior fraud associations.',
+  },
 ]
 
 export const RECENT_TRANSACTIONS = [

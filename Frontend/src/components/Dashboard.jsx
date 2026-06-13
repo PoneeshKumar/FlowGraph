@@ -255,23 +255,26 @@ function AlertRow({ alert, isOpen, onToggle }) {
 
 const FEED_LIMIT = 6
 
-function FeedSectionHeader({ title, meta, metaTone = 'text-ink-4', onViewAll }) {
+function FeedSectionHeader({ title, count, countLabel, countTone = 'text-ink-4', subtitle, onViewAll }) {
   return (
-    <div className="mb-4 flex items-baseline justify-between border-b border-line/60 pb-3">
-      <h2 className="font-display text-[17px] font-medium text-ink">
-        {title}
-        {meta != null && (
-          <span className={`ml-2 font-mono text-[13px] font-normal ${metaTone}`}>{meta}</span>
-        )}
-      </h2>
-      <button
-        type="button"
-        onClick={onViewAll}
-        className="shrink-0 text-[12px] font-medium text-accent hover:opacity-70"
-      >
-        View all
-      </button>
-    </div>
+    <header className="mb-5 border-b border-line-2 pb-4">
+      <div className="flex items-start justify-between gap-4">
+        <div className="min-w-0">
+          <h2 className="font-display text-[17px] font-medium leading-tight text-ink">{title}</h2>
+          <p className="mt-1 text-[12px] text-ink-3">{subtitle}</p>
+        </div>
+        <button
+          type="button"
+          onClick={onViewAll}
+          className="shrink-0 pt-0.5 text-[12px] font-medium text-accent hover:opacity-70"
+        >
+          View all
+        </button>
+      </div>
+      <p className="mt-3 font-mono text-[11px] tnum text-ink-4">
+        Showing <span className={`font-semibold ${countTone}`}>{count}</span> {countLabel}
+      </p>
+    </header>
   )
 }
 
@@ -418,17 +421,19 @@ export default function Dashboard({ onNav }) {
         </div>
       </section>
 
-      {/* ── Peer feeds: equal-weight alerts + activity ── */}
-      <section className="flex-1 px-8 py-8">
-        <div className="grid grid-cols-1 gap-10 lg:grid-cols-2 lg:gap-0 lg:divide-x lg:divide-line/60">
-          <div className="min-w-0 lg:pr-8">
+      {/* ── Peer feeds: equal 50/50 columns on md+ ── */}
+      <section className="flex-1 border-t border-line-2 px-8 py-8">
+        <div className="grid grid-cols-1 md:grid-cols-2 md:gap-0">
+          <div className="min-w-0 md:border-r md:border-line-2 md:pr-8">
             <FeedSectionHeader
               title="Risk alerts"
-              meta={METRICS.riskAlerts.value}
-              metaTone="text-critical"
+              count={FEED_LIMIT}
+              countLabel={`of ${METRICS.riskAlerts.value} open`}
+              countTone="text-critical"
+              subtitle="Flagged patterns requiring review"
               onViewAll={() => onNav('alerts')}
             />
-            <div className="divide-y divide-line/60">
+            <div className="divide-y divide-line/70">
               {RECENT_ALERTS.slice(0, FEED_LIMIT).map(alert => (
                 <AlertRow
                   key={alert.id}
@@ -440,14 +445,16 @@ export default function Dashboard({ onNav }) {
             </div>
           </div>
 
-          <div className="min-w-0 border-t border-line/60 pt-10 lg:border-t-0 lg:pt-0 lg:pl-8">
+          <div className="min-w-0 border-t border-line-2 pt-8 md:border-t-0 md:pl-8 md:pt-0">
             <FeedSectionHeader
               title="Recent activity"
-              meta="Live"
-              metaTone="text-accent"
+              count={FEED_LIMIT}
+              countLabel="live transfers"
+              countTone="text-accent"
+              subtitle="Latest settled and in-flight transfers"
               onViewAll={() => onNav('transactions')}
             />
-            <div className="divide-y divide-line/60">
+            <div className="divide-y divide-line/70">
               {RECENT_TRANSACTIONS.slice(0, FEED_LIMIT).map(tx => (
                 <ActivityRow key={tx.id} tx={tx} />
               ))}
