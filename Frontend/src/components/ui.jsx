@@ -18,16 +18,16 @@ export const RISK_VAR = {
 }
 
 const CHIP_TONE = {
-  critical: 'text-critical bg-critical/10 border-critical/30',
-  high:     'text-high bg-high/10 border-high/30',
-  medium:   'text-medium bg-medium/10 border-medium/30',
-  low:      'text-low bg-low/10 border-low/30',
-  neutral:  'text-ink-2 bg-hover border-line-2',
+  critical: 'text-critical bg-critical/8',
+  high:     'text-high bg-high/8',
+  medium:   'text-medium bg-medium/8',
+  low:      'text-low bg-low/8',
+  neutral:  'text-ink-2 bg-hover',
 }
 
 export function RiskChip({ level }) {
   return (
-    <span className={`inline-flex items-center rounded-md border px-1.5 py-px font-mono text-[10px] font-semibold uppercase tracking-[0.08em] ${CHIP_TONE[level]}`}>
+    <span className={`inline-flex items-center rounded px-1.5 py-px font-mono text-[10px] font-semibold uppercase tracking-[0.08em] ${CHIP_TONE[level]}`}>
       {level}
     </span>
   )
@@ -51,7 +51,7 @@ const STATUS_TONE = {
 export function StatusChip({ status }) {
   const tone = CHIP_TONE[STATUS_TONE[status] || 'neutral']
   return (
-    <span className={`inline-flex items-center gap-1.5 whitespace-nowrap rounded-full border px-2 py-px text-[10.5px] font-medium capitalize ${tone}`}>
+    <span className={`inline-flex items-center gap-1.5 whitespace-nowrap rounded-full px-2 py-px text-[10.5px] font-medium capitalize ${tone}`}>
       {status.replace(/_/g, ' ')}
     </span>
   )
@@ -86,21 +86,20 @@ export function useCountUp(value, duration = 900, delay = 0) {
 
 export function PageHeader({ title, subtitle, children }) {
   return (
-    <header className="z-10 flex shrink-0 items-center justify-between gap-4 border-b border-line px-7 py-4">
+    <header className="z-10 flex shrink-0 items-end justify-between gap-6 px-8 pb-6 pt-2">
       <div className="min-w-0">
-        <h1 className="font-display text-[20px] font-medium tracking-tight text-ink">{title}</h1>
-        {subtitle && <div className="mt-0.5 text-xs text-ink-3">{subtitle}</div>}
+        <h1 className="font-display text-[26px] font-medium tracking-tight text-ink">{title}</h1>
+        {subtitle && <div className="mt-1.5 text-[13px] text-ink-3">{subtitle}</div>}
       </div>
-      {children && <div className="flex shrink-0 items-center gap-2">{children}</div>}
+      {children && <div className="flex shrink-0 items-center gap-2 pb-0.5">{children}</div>}
     </header>
   )
 }
 
 export function SectionLabel({ children, right }) {
   return (
-    <div className="mb-3 flex items-center gap-3">
+    <div className="mb-3 flex items-center justify-between gap-3">
       <span className="text-[11px] font-bold uppercase tracking-[0.12em] text-ink-2">{children}</span>
-      <span className="h-px flex-1 bg-line" />
       {right}
     </div>
   )

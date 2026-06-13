@@ -145,7 +145,7 @@ function NodePanel({ node, onClose }) {
       animate={{ opacity: 1, x: 0 }}
       exit={{ opacity: 0, x: 24 }}
       transition={{ duration: 0.28, ease: [0.32, 0.72, 0, 1] }}
-      className="glass absolute bottom-4 right-4 top-4 flex w-[300px] flex-col overflow-y-auto rounded-lg"
+      className="glass absolute bottom-4 right-4 top-4 flex w-[300px] flex-col overflow-y-auto rounded-xl"
     >
       <div className="flex items-start justify-between px-5 pb-3.5 pt-4" style={{ boxShadow: `inset 0 2px 0 0 ${color}` }}>
         <div>
@@ -163,14 +163,14 @@ function NodePanel({ node, onClose }) {
       </div>
 
       {/* Stat strip — divided by hairlines, not tiles */}
-      <div className="grid grid-cols-4 border-b border-t border-line">
+      <div className="grid grid-cols-4">
         {[
           ['Volume',   `$${(node.volume / 1000000).toFixed(1)}M`],
           ['Links',    edges.length],
           ['In',       inbound.length],
           ['Out',      outbound.length],
-        ].map(([label, value], i) => (
-          <div key={label} className={`px-3 py-2.5 ${i > 0 ? 'border-l border-line' : ''}`}>
+        ].map(([label, value]) => (
+          <div key={label} className="px-3 py-2.5">
             <div className="mb-0.5 text-[9px] font-bold uppercase tracking-[0.1em] text-ink-4">{label}</div>
             <div className="font-mono text-[13px] font-semibold text-ink tnum">{value}</div>
           </div>
@@ -182,7 +182,7 @@ function NodePanel({ node, onClose }) {
         {edges.map(edge => {
           const isOut = edge.from === node.id
           return (
-            <div key={edge.id} className="flex items-center justify-between border-b border-line py-2 text-[11.5px] last:border-b-0">
+            <div key={edge.id} className="flex items-center justify-between py-2 text-[11.5px]">
               <div className="flex items-center gap-2">
                 {edge.isCycle && <span className="text-[10px] font-bold text-critical">⟲</span>}
                 <span className={`w-7 text-[9px] font-bold tracking-[0.05em] ${isOut ? 'text-high' : 'text-accent'}`}>
@@ -197,7 +197,7 @@ function NodePanel({ node, onClose }) {
       </div>
 
       {node.risk === 'critical' && (
-        <div className="border-t border-line px-5 py-3.5">
+        <div className="px-5 py-3.5">
           <div className="mb-1 text-[10px] font-bold uppercase tracking-[0.08em] text-critical">AI Risk Note</div>
           <div className="text-[12px] leading-relaxed text-ink-2">
             Central hub with disproportionate network influence. Recommend immediate review.
@@ -273,7 +273,7 @@ export default function GraphExplorer() {
           <button
             key={lbl}
             onClick={() => setZoom(z => Math.max(0.5, Math.min(2.5, z + d)))}
-            className="flex h-[26px] w-[26px] items-center justify-center rounded-lg border border-line text-[15px] text-ink-2 transition-colors duration-150 hover:bg-hover hover:text-ink active:scale-95"
+            className="flex h-[26px] w-[26px] items-center justify-center rounded-lg text-[15px] text-ink-2 transition-colors duration-150 hover:bg-hover hover:text-ink active:scale-95"
           >
             {lbl}
           </button>

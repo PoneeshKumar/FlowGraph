@@ -2,76 +2,46 @@
 
 /* ────────────────────────────────────────────────────────────────────────────
    FlowGraph — "Liquid Glass Ledger" design system, v2
-   One continuous sheet of glass. Structure comes from hairlines and
-   typography, not boxes. Color is reserved for data (risk, status, flow).
+   One continuous sheet. Structure from type and faint rhythm, not boxes.
+   Color is reserved for data (risk, status, flow).
    ──────────────────────────────────────────────────────────────────────────── */
 
 :root {
   /* ── Canvas ── */
-  --bg-base: #070b14;
+  --bg-base: #fafbfc;
 
   /* ── Backdrop tint (barely-there, static) ── */
-  --tint-1: rgba(63, 217, 164, 0.045);
-  --tint-2: rgba(76, 110, 245, 0.04);
-
-  /* ── Glass (floating overlays only) ── */
-  --glass-bg:        rgba(255, 255, 255, 0.03);
-  --glass-bg-strong: rgba(11, 16, 28, 0.78);
-  --glass-border:    rgba(255, 255, 255, 0.07);
-  --glass-shadow:    rgba(2, 6, 16, 0.5);
-
-  /* ── Ink ── */
-  --ink:   #e9eef7;
-  --ink-2: #a8b4c9;
-  --ink-3: #6d7b94;
-  --ink-4: #46536b;
-
-  /* ── Hairlines ── */
-  --line:        rgba(255, 255, 255, 0.06);
-  --line-strong: rgba(255, 255, 255, 0.13);
-
-  /* ── Brand accent — settlement mint ── */
-  --accent:      #3fd9a4;
-  --accent-deep: #16b485;
-
-  /* ── Risk ladder ── */
-  --critical: #ff6f66;
-  --high:     #f5a14b;
-  --medium:   #e3c45c;
-  --low:      #3fd9a4;
-
-  /* ── Hover wash ── */
-  --hover: rgba(255, 255, 255, 0.04);
-}
-
-[data-theme="light"] {
-  --bg-base: #eef1f6;
-
   --tint-1: rgba(34, 211, 168, 0.07);
   --tint-2: rgba(76, 110, 245, 0.05);
 
-  --glass-bg:        rgba(255, 255, 255, 0.5);
-  --glass-bg-strong: rgba(255, 255, 255, 0.85);
-  --glass-border:    rgba(20, 33, 56, 0.09);
-  --glass-shadow:    rgba(28, 41, 66, 0.16);
+  /* ── Glass (floating overlays only) ── */
+  --glass-bg:        rgba(255, 255, 255, 0.72);
+  --glass-bg-strong: rgba(255, 255, 255, 0.88);
+  --glass-border:    rgba(20, 33, 56, 0.06);
+  --glass-shadow:    rgba(28, 41, 66, 0.08);
 
+  /* ── Ink ── */
   --ink:   #131c2b;
   --ink-2: #3e4d66;
   --ink-3: #71809a;
   --ink-4: #a4b0c4;
 
-  --line:        rgba(20, 33, 56, 0.08);
-  --line-strong: rgba(20, 33, 56, 0.17);
+  /* ── Hairlines — kept faint so rows read as one surface ── */
+  --line:        rgba(20, 33, 56, 0.055);
+  --line-strong: rgba(20, 33, 56, 0.12);
 
+  /* ── Brand accent — settlement mint ── */
   --accent:      #0d9d72;
   --accent-deep: #0a8761;
 
+  /* ── Risk ladder ── */
   --critical: #d83a30;
   --high:     #c46a10;
   --medium:   #9c7c14;
   --low:      #0d9d72;
 
-  --hover: rgba(20, 33, 56, 0.04);
+  /* ── Hover wash ── */
+  --hover: rgba(20, 33, 56, 0.03);
 }
 
 /* Map runtime tokens into Tailwind utility namespace */
@@ -101,19 +71,19 @@
   --ease-fluid: cubic-bezier(0.32, 0.72, 0, 1);
 }
 
-/* ── Glass — reserved for floating overlays (panels over the graph, menus) ── */
+/* ── Glass — reserved for floating overlays (menus, graph node panel) ── */
 @utility glass {
   background: var(--glass-bg-strong);
-  -webkit-backdrop-filter: blur(20px) saturate(140%);
-  backdrop-filter: blur(20px) saturate(140%);
+  -webkit-backdrop-filter: blur(16px) saturate(120%);
+  backdrop-filter: blur(16px) saturate(120%);
   border: 1px solid var(--glass-border);
-  box-shadow: 0 16px 48px -16px var(--glass-shadow);
+  box-shadow: 0 8px 32px -12px var(--glass-shadow);
 }
 
 @utility glass-soft {
   background: var(--glass-bg);
-  -webkit-backdrop-filter: blur(12px);
-  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(10px);
+  backdrop-filter: blur(10px);
   border: 1px solid var(--glass-border);
 }
 
@@ -143,7 +113,7 @@ body {
   transition: background 0.5s var(--ease-fluid);
 }
 
-#root { display: flex; width: 100%; }
+#root { display: flex; flex-direction: column; width: 100%; min-height: 100vh; }
 
 button {
   font-family: inherit;
@@ -180,7 +150,6 @@ input { font-family: inherit; }
 }
 
 .backdrop::after {
-  /* fine grain so large flat areas don't band */
   content: "";
   position: absolute;
   inset: 0;
