@@ -1,5 +1,5 @@
 import { motion } from 'motion/react'
-import { useState, useEffect } from 'react'
+import { useState } from 'react'
 
 const NAV = [
   { id: 'dashboard',    label: 'Overview' },
@@ -8,7 +8,7 @@ const NAV = [
   { id: 'transactions', label: 'Transactions' },
 ]
 
-// Live graph mark — still when idle; rotates + drifts on hover or every 30s
+// Live graph mark — still when idle; rotates + drifts on hover
 function FlowLogo({ active }) {
   const hub = { x: 16.5, y: 14 }
   const nodes = [
@@ -90,18 +90,6 @@ function FlowLogo({ active }) {
 
 export default function Sidebar({ active, onNav }) {
   const [logoHover, setLogoHover] = useState(false)
-  const [logoBurst, setLogoBurst] = useState(false)
-
-  // Fire a short animation burst every 30s
-  useEffect(() => {
-    const iv = setInterval(() => {
-      setLogoBurst(true)
-      setTimeout(() => setLogoBurst(false), 6000)
-    }, 30000)
-    return () => clearInterval(iv)
-  }, [])
-
-  const logoActive = logoHover || logoBurst
 
   return (
     <header className="relative z-10 flex shrink-0 items-center gap-8 px-8 py-4">
@@ -112,7 +100,7 @@ export default function Sidebar({ active, onNav }) {
         onMouseLeave={() => setLogoHover(false)}
         className="flex shrink-0 items-center gap-2.5"
       >
-        <FlowLogo active={logoActive} />
+        <FlowLogo active={logoHover} />
         <span className="font-display text-[18px] font-medium tracking-tight text-ink">FlowGraph</span>
       </button>
 

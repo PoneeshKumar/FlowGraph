@@ -1,5 +1,5 @@
 /* eslint-disable react-refresh/only-export-components -- shared primitives module: mixes components, hooks, and tokens by design */
-import { useEffect, useState } from 'react'
+import { useEffect, useState, useRef } from 'react'
 
 /* Shared primitives for the Liquid Glass Ledger system. */
 
@@ -82,6 +82,38 @@ export function useCountUp(value, duration = 900, delay = 0) {
     return () => { clearTimeout(timer); if (frame !== null) cancelAnimationFrame(frame) }
   }, [value, duration, delay])
   return displayed
+}
+
+/** Smoothly tween between numeric targets (for hover scrubbing). */
+export function useTweenValue(target, duration = 200) {
+  const [display, setDisplay] = useState(target)
+  const currentRef = useRef(target)
+  const rafRef = useRef(null)
+
+  useEffect(() => {
+    const from = currentRef.current
+    if (Math.abs(from - target) < 0.0001) return
+
+    let start = null
+    const step = (ts) => {
+      if (!start) start = ts
+      const p = Math.min((ts - start) / duration, 1)
+      const eased = 1 - Math.pow(1 - p, 2)
+      const v = from + (target - from) * eased
+      currentRef.current = v
+      setDisplay(v)
+      if (p < 1) {
+        rafRef.current = requestAnimationFrame(step)
+      } else {
+        currentRef.current = target
+        setDisplay(target)
+      }
+    }
+    rafRef.current = requestAnimationFrame(step)
+    return () => { if (rafRef.current) cancelAnimationFrame(rafRef.current) }
+  }, [target, duration])
+
+  return display
 }
 
 export function PageHeader({ title, subtitle, children }) {
