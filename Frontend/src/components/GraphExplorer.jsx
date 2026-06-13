@@ -46,7 +46,10 @@ function GraphEdge({ edge, fromNode, toNode, isActive, index }) {
   const y2 = fromNode.y + dy * frac
 
   const width = getEdgeWidth(edge.weight)
-  const dur = 0.7 + (1 - Math.min(edge.weight / 2000000, 1)) * 0.6
+  const dashPattern = edge.isCycle ? '6 14' : '4 14'
+  const dashPeriod = edge.isCycle ? 20 : 18
+  const dur = 1.4 + (1 - Math.min(edge.weight / 2000000, 1)) * 1.0
+  const flowOpacity = isActive ? (edge.isCycle ? 0.82 : 0.5) : 0
 
   return (
     <g>
@@ -56,27 +59,30 @@ function GraphEdge({ edge, fromNode, toNode, isActive, index }) {
         strokeDasharray={edge.isCycle ? '5 5' : 'none'}
         markerEnd={`url(#arrow-${edge.isCycle ? 'cycle' : fromNode.risk})`}
         stroke={edge.isCycle ? 'var(--critical)' : 'var(--line-strong)'}
+        vectorEffect="non-scaling-stroke"
         initial={{ opacity: 0 }}
         animate={{ opacity: edge.isCycle ? 0.75 : 0.4 }}
         transition={{ delay: 0.25 + index * 0.025, duration: 0.6, ease: 'easeOut' }}
       />
-      {/* Flow pulse — fades in/out instead of popping */}
-      <AnimatePresence>
-        {isActive && (
-          <motion.line
-            x1={fromNode.x} y1={fromNode.y} x2={x2} y2={y2}
-            strokeWidth={width + 0.6}
-            strokeDasharray={edge.isCycle ? '8 10' : '5 12'}
-            strokeLinecap="round"
-            stroke={edge.isCycle ? 'var(--critical)' : 'var(--accent)'}
-            initial={{ opacity: 0 }}
-            animate={{ opacity: edge.isCycle ? 0.9 : 0.6 }}
-            exit={{ opacity: 0 }}
-            transition={{ duration: 0.5, ease: 'easeInOut' }}
-            style={{ animation: `flowDash ${dur}s linear infinite` }}
-          />
-        )}
-      </AnimatePresence>
+      {/* Flow pulse — always mounted; opacity + dash loop avoid mount/unmount pops */}
+      <line
+        x1={fromNode.x}
+        y1={fromNode.y}
+        x2={x2}
+        y2={y2}
+        strokeWidth={width + 0.5}
+        strokeDasharray={dashPattern}
+        strokeLinecap="round"
+        stroke={edge.isCycle ? 'var(--critical)' : 'var(--accent)'}
+        vectorEffect="non-scaling-stroke"
+        style={{
+          opacity: flowOpacity,
+          transition: 'opacity 0.9s ease-in-out',
+          animation: `flowDash ${dur}s linear infinite`,
+          animationDelay: `${-(index * 0.22) % dur}s`,
+          ['--dash-period']: `-${dashPeriod}`,
+        }}
+      />
     </g>
   )
 }
@@ -226,9 +232,9 @@ export default function GraphExplorer() {
       const timeoutId = setTimeout(() => {
         setActiveEdges(s => { const n = new Set(s); n.delete(id); return n })
         timeoutIds.delete(timeoutId)
-      }, 2600)
+      }, 3200)
       timeoutIds.add(timeoutId)
-    }, 1100)
+    }, 2000)
     return () => { clearInterval(iv); timeoutIds.forEach(clearTimeout) }
   }, [])
 

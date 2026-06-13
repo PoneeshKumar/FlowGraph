@@ -110,6 +110,30 @@ export const METRICS = {
   riskAlerts:    { value: 17,       delta: +42.9 },
 }
 
+/** Cumulative network volume over time — powers the overview hero chart. */
+export const VOLUME_SERIES = {
+  '24h': {
+    labels: ['12a', '2a', '4a', '6a', '8a', '10a', '12p', '2p', '4p', '6p', '8p', 'Now'],
+    volume: [4.1, 4.3, 4.2, 4.8, 5.6, 6.2, 6.8, 7.1, 7.4, 7.9, 8.1, 8.42],
+    baseline: [3.9, 4.0, 4.0, 4.2, 4.5, 4.8, 5.1, 5.4, 5.7, 6.0, 6.3, 6.5],
+  },
+  '7d': {
+    labels: ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Today'],
+    volume: [6.2, 6.8, 7.1, 7.4, 7.9, 8.0, 8.42],
+    baseline: [5.8, 6.0, 6.2, 6.4, 6.6, 6.7, 6.8],
+  },
+  '30d': {
+    labels: ['W1', 'W2', 'W3', 'W4', 'Today'],
+    volume: [5.4, 6.1, 6.9, 7.6, 8.42],
+    baseline: [5.2, 5.5, 5.8, 6.1, 6.4],
+  },
+  '90d': {
+    labels: ['Jan', 'Feb', 'Mar', 'Today'],
+    volume: [4.8, 6.2, 7.5, 8.42],
+    baseline: [4.5, 5.0, 5.6, 6.2],
+  },
+}
+
 // ── In-Flight: ACH Batches ──────────────────────────────────────────────────
 export const ACH_BATCHES = [
   {

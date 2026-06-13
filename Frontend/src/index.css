@@ -160,7 +160,8 @@ input { font-family: inherit; }
 
 /* ── Shared motion ── */
 @keyframes flowDash {
-  to { stroke-dashoffset: -26; }
+  from { stroke-dashoffset: 0; }
+  to   { stroke-dashoffset: var(--dash-period, -17); }
 }
 @keyframes pulseSoft {
   0%, 100% { opacity: 1; }
