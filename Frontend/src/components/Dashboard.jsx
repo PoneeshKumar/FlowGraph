@@ -187,9 +187,12 @@ function VolumeChart({ period, onHover, onSelect }) {
   const seriesRef = useRef(series)
   const onSelectRef = useRef(onSelect)
   const onHoverRef = useRef(onHover)
-  seriesRef.current = series
-  onSelectRef.current = onSelect
-  onHoverRef.current = onHover
+
+  useEffect(() => {
+    seriesRef.current = series
+    onSelectRef.current = onSelect
+    onHoverRef.current = onHover
+  }, [series, onSelect, onHover])
 
   const [hoverIndex, setHoverIndex] = useState(null)
   const [drag, setDrag] = useState(null)
@@ -547,32 +550,71 @@ function StatCard({ label, value, format, delta, tone = 'text-ink' }) {
   )
 }
 
-function AlertRow({ alert, isOpen, onToggle }) {
+function ExpandLink({ onClick, label }) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      className="absolute right-0 top-3.5 flex h-7 w-7 items-center justify-center rounded-md text-ink-4 transition-colors hover:bg-hover hover:text-accent"
+      aria-label={label}
+    >
+      <svg width="14" height="14" viewBox="0 0 14 14" fill="none" aria-hidden="true">
+        <path
+          d="M4.5 9.5L9.5 4.5M9.5 4.5H5.5M9.5 4.5V8.5"
+          stroke="currentColor"
+          strokeWidth="1.4"
+          strokeLinecap="round"
+          strokeLinejoin="round"
+        />
+      </svg>
+    </button>
+  )
+}
+
+function AlertRow({ alert, isOpen, onToggle, onExpand }) {
   const tone = RISK_VAR[alert.severity]
   return (
-    <article className="cursor-pointer py-3.5" onClick={onToggle}>
-      <div className="flex items-start gap-2.5">
-        <span className="mt-1.5 h-[5px] w-[5px] shrink-0 rounded-full" style={{ background: tone }} />
-        <div className="min-w-0 flex-1">
-          <div className="flex items-baseline justify-between gap-2">
-            <span className="text-[13px] font-medium text-ink">{alert.type}</span>
-            <span className="shrink-0 font-mono text-[10px] text-ink-4">{alert.timestamp}</span>
+    <article className="relative pr-9">
+      <button
+        type="button"
+        onClick={onToggle}
+        className="w-full cursor-pointer py-3.5 text-left transition-colors hover:bg-hover/60"
+      >
+        <div className="flex items-start gap-2.5">
+          <span className="mt-1.5 h-[5px] w-[5px] shrink-0 rounded-full" style={{ background: tone }} />
+          <div className="min-w-0 flex-1">
+            <div className="flex items-baseline justify-between gap-2">
+              <span className="text-[13px] font-medium text-ink">{alert.type}</span>
+              <span className="shrink-0 font-mono text-[10px] text-ink-4">{alert.timestamp}</span>
+            </div>
+            <p className="mt-0.5 line-clamp-2 text-[12px] leading-snug text-ink-2">{alert.message}</p>
           </div>
-          <p className="mt-0.5 line-clamp-2 text-[12px] leading-snug text-ink-2">{alert.message}</p>
         </div>
-      </div>
+      </button>
+
       <AnimatePresence initial={false}>
         {isOpen && (
-          <motion.p
+          <motion.div
             initial={{ height: 0, opacity: 0 }}
             animate={{ height: 'auto', opacity: 1 }}
             exit={{ height: 0, opacity: 0 }}
-            className="ml-3.5 mt-2 overflow-hidden text-[12px] leading-relaxed text-ink-3"
+            transition={{ duration: 0.28, ease: [0.22, 1, 0.36, 1] }}
+            className="overflow-hidden"
           >
-            {alert.aiExplanation}
-          </motion.p>
+            <div className="ml-3.5 pb-3 pr-1">
+              <p className="text-[12px] leading-relaxed text-ink-3">{alert.aiExplanation}</p>
+              <p className="mt-2 font-mono text-[11px] text-ink-4 tnum">
+                {alert.account} · ${(alert.amount / 1000).toFixed(0)}K · {alert.confidence}% confidence
+              </p>
+            </div>
+          </motion.div>
         )}
       </AnimatePresence>
+
+      <ExpandLink
+        onClick={e => { e.stopPropagation(); onExpand() }}
+        label={`Open ${alert.id} in Alerts`}
+      />
     </article>
   )
 }
@@ -602,34 +644,66 @@ function FeedSectionHeader({ title, count, countLabel, countTone = 'text-ink-4',
   )
 }
 
-function ActivityRow({ tx }) {
+function ActivityRow({ tx, isOpen, onToggle, onExpand }) {
   return (
-    <div className="flex items-center gap-3 py-3.5">
-      <div className="min-w-0 flex-1">
-        <div className="truncate font-mono text-[12px] text-ink-2">
-          {tx.from} → {tx.to}
+    <article className="relative pr-9">
+      <button
+        type="button"
+        onClick={onToggle}
+        className="flex w-full cursor-pointer items-center gap-3 py-3.5 text-left transition-colors hover:bg-hover/60"
+      >
+        <div className="min-w-0 flex-1">
+          <div className="truncate font-mono text-[12px] text-ink-2">
+            {tx.from} → {tx.to}
+          </div>
+          <div className="mt-0.5 flex items-center gap-2 text-[11px] text-ink-4">
+            <span className="font-mono tnum">{tx.ts}</span>
+            <span>{tx.rail}</span>
+          </div>
         </div>
-        <div className="mt-0.5 flex items-center gap-2 text-[11px] text-ink-4">
-          <span className="font-mono tnum">{tx.ts}</span>
-          <span>{tx.rail}</span>
+        <div className="shrink-0 text-right">
+          <div className="font-mono text-[13px] font-semibold text-ink tnum">
+            ${tx.amount.toLocaleString()}
+          </div>
+          <div className="mt-0.5 flex justify-end gap-1.5">
+            <RiskChip level={tx.risk} />
+            <StatusChip status={tx.status} />
+          </div>
         </div>
-      </div>
-      <div className="shrink-0 text-right">
-        <div className="font-mono text-[13px] font-semibold text-ink tnum">
-          ${tx.amount.toLocaleString()}
-        </div>
-        <div className="mt-0.5 flex justify-end gap-1.5">
-          <RiskChip level={tx.risk} />
-          <StatusChip status={tx.status} />
-        </div>
-      </div>
-    </div>
+      </button>
+
+      <AnimatePresence initial={false}>
+        {isOpen && (
+          <motion.div
+            initial={{ height: 0, opacity: 0 }}
+            animate={{ height: 'auto', opacity: 1 }}
+            exit={{ height: 0, opacity: 0 }}
+            transition={{ duration: 0.28, ease: [0.22, 1, 0.36, 1] }}
+            className="overflow-hidden"
+          >
+            <div className="pb-3">
+              <p className="font-mono text-[11px] text-ink-3 tnum">{tx.id}</p>
+              <p className="mt-1.5 text-[12px] leading-relaxed text-ink-3">
+                {tx.rail} transfer of ${tx.amount.toLocaleString()} {tx.currency} from {tx.from} to {tx.to}.
+                {' '}Status: {tx.status}. Risk level: {tx.risk}.
+              </p>
+            </div>
+          </motion.div>
+        )}
+      </AnimatePresence>
+
+      <ExpandLink
+        onClick={e => { e.stopPropagation(); onExpand() }}
+        label={`Open ${tx.id} in Transactions`}
+      />
+    </article>
   )
 }
 
 export default function Dashboard({ onNav }) {
   const [period, setPeriod] = useState('24h')
   const [openAlertId, setOpenAlertId] = useState(null)
+  const [openTxId, setOpenTxId] = useState(null)
   const [liveCount, setLiveCount] = useState(88421)
   const [hoverPoint, setHoverPoint] = useState(null)
   const [selectRange, setSelectRange] = useState(null)
@@ -803,6 +877,7 @@ export default function Dashboard({ onNav }) {
                   alert={alert}
                   isOpen={openAlertId === alert.id}
                   onToggle={() => setOpenAlertId(prev => (prev === alert.id ? null : alert.id))}
+                  onExpand={() => onNav('alerts', { alertId: alert.id })}
                 />
               ))}
             </div>
@@ -819,7 +894,13 @@ export default function Dashboard({ onNav }) {
             />
             <div className="divide-y divide-line/70">
               {RECENT_TRANSACTIONS.slice(0, FEED_LIMIT).map(tx => (
-                <ActivityRow key={tx.id} tx={tx} />
+                <ActivityRow
+                  key={tx.id}
+                  tx={tx}
+                  isOpen={openTxId === tx.id}
+                  onToggle={() => setOpenTxId(prev => (prev === tx.id ? null : tx.id))}
+                  onExpand={() => onNav('transactions', { txnId: tx.id })}
+                />
               ))}
             </div>
           </div>

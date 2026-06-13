@@ -254,8 +254,8 @@ const HISTORY_COLS = [
   { label: 'Time',        col: 'ts' },
 ]
 
-function HistoryTab() {
-  const [search, setSearch] = useState('')
+function HistoryTab({ initialSearch = '' }) {
+  const [search, setSearch] = useState(initialSearch)
   const [riskFilter, setRiskFilter] = useState('all')
   const [sortBy, setSortBy] = useState('ts')
   const [sortDir, setSortDir] = useState('desc')
@@ -406,8 +406,10 @@ const TABS = [
   { id: 'history',  label: 'History',   badge: ALL_HISTORY.length },
 ]
 
-export default function TransactionsView() {
-  const [activeTab, setActiveTab] = useState('inflight')
+export default function TransactionsView({ navContext }) {
+  const historySearch = navContext?.txnId ?? navContext?.search ?? navContext?.account ?? ''
+  const [manualTab, setManualTab] = useState('inflight')
+  const activeTab = historySearch ? 'history' : manualTab
   const [liveCount, setLiveCount] = useState(88421)
 
   useEffect(() => {
@@ -449,7 +451,7 @@ export default function TransactionsView() {
           return (
             <button
               key={tab.id}
-              onClick={() => setActiveTab(tab.id)}
+              onClick={() => setManualTab(tab.id)}
               className={`flex items-center gap-2 text-[13px] transition-colors duration-200
                 ${isActive ? 'font-semibold text-accent' : 'text-ink-3 hover:text-ink-2'}`}
             >
@@ -469,7 +471,7 @@ export default function TransactionsView() {
             exit={{ opacity: 0, y: -6 }}
             transition={{ duration: 0.22, ease: [0.32, 0.72, 0, 1] }}
           >
-            {activeTab === 'inflight' ? <InFlightTab /> : <HistoryTab />}
+            {activeTab === 'inflight' ? <InFlightTab /> : <HistoryTab key={historySearch || 'history'} initialSearch={historySearch} />}
           </motion.div>
         </AnimatePresence>
       </div>

@@ -1,7 +1,7 @@
-import { useState } from 'react'
-import { motion, AnimatePresence } from 'motion/react'
+import { useState, useEffect } from 'react'
+import { LayoutGroup, motion, AnimatePresence } from 'motion/react'
 import { RECENT_ALERTS } from '../data/mockData'
-import { RISK_VAR, PageHeader } from './ui'
+import { RISK_VAR, PageHeader, useToast } from './ui'
 
 const MORE_ALERTS = [
   ...RECENT_ALERTS,
@@ -22,12 +22,24 @@ const MORE_ALERTS = [
 const FILTERS = ['all', 'critical', 'high', 'medium', 'low']
 
 const ACTIONS = [
-  { label: 'Freeze account', tone: 'text-critical hover:opacity-80' },
-  { label: 'Escalate', tone: 'text-high hover:opacity-80' },
-  { label: 'False positive', tone: 'text-ink-3 hover:text-ink-2' },
+  {
+    label: 'Freeze account',
+    tone: 'text-critical hover:opacity-80',
+    message: alert => `${alert.account} flagged for review`,
+  },
+  {
+    label: 'Escalate',
+    tone: 'text-high hover:opacity-80',
+    message: () => 'Alert escalated to tier-2',
+  },
+  {
+    label: 'False positive',
+    tone: 'text-ink-3 hover:text-ink-2',
+    message: () => 'Marked as false positive',
+  },
 ]
 
-function AlertRow({ alert, isOpen, onToggle }) {
+function AlertRow({ alert, isOpen, onToggle, onAction }) {
   const color = RISK_VAR[alert.severity]
 
   return (
@@ -71,7 +83,10 @@ function AlertRow({ alert, isOpen, onToggle }) {
                   <button
                     key={btn.label}
                     type="button"
-                    onClick={e => e.stopPropagation()}
+                    onClick={e => {
+                      e.stopPropagation()
+                      onAction(btn.message(alert))
+                    }}
                     className={`text-[13px] font-medium ${btn.tone}`}
                   >
                     {btn.label}
@@ -86,12 +101,66 @@ function AlertRow({ alert, isOpen, onToggle }) {
   )
 }
 
-export default function AlertsView() {
-  const [openId, setOpenId] = useState(null)
-  const [filter, setFilter] = useState('all')
+function FilterableAlertRow({ alert, visible, isOpen, onToggle, onAction }) {
+  return (
+    <motion.div
+      id={`alert-${alert.id}`}
+      layout="position"
+      initial={false}
+      animate={{
+        opacity: visible ? 1 : 0,
+        gridTemplateRows: visible ? '1fr' : '0fr',
+        borderBottomColor: visible ? 'var(--line)' : 'transparent',
+      }}
+      transition={{
+        opacity: { duration: 0.18 },
+        gridTemplateRows: { duration: 0.38, ease: [0.22, 1, 0.36, 1] },
+        layout: { duration: 0.38, ease: [0.22, 1, 0.36, 1] },
+      }}
+      className="grid border-b border-line/70 last:border-b-0"
+      aria-hidden={!visible}
+      style={{ pointerEvents: visible ? undefined : 'none' }}
+    >
+      <div className="overflow-hidden">
+        <AlertRow alert={alert} isOpen={isOpen} onToggle={onToggle} onAction={onAction} />
+      </div>
+    </motion.div>
+  )
+}
+
+export default function AlertsView({ navContext }) {
+  const navAlertId = navContext?.alertId ?? null
+  const [userFilter, setUserFilter] = useState('all')
+  const [userOpenId, setUserOpenId] = useState(null)
+  const { show, ToastHost } = useToast()
+
+  const filter = navAlertId ? 'all' : userFilter
+  const openId = navAlertId ?? userOpenId
+
+  useEffect(() => {
+    if (!navAlertId) return
+    if (!MORE_ALERTS.some(a => a.id === navAlertId)) return
+
+    const scrollTimer = window.setTimeout(() => {
+      document.getElementById(`alert-${navAlertId}`)?.scrollIntoView({ block: 'center', behavior: 'smooth' })
+    }, 120)
+
+    return () => window.clearTimeout(scrollTimer)
+  }, [navAlertId])
 
   const filtered = MORE_ALERTS.filter(a => filter === 'all' || a.severity === filter)
   const counts = MORE_ALERTS.reduce((acc, a) => { acc[a.severity] = (acc[a.severity] || 0) + 1; return acc }, {})
+
+  const handleFilter = (next) => {
+    setUserFilter(next)
+    setUserOpenId(prev => {
+      if (prev == null) return null
+      const stillVisible = MORE_ALERTS.some(
+        a => a.id === prev && (next === 'all' || a.severity === next),
+      )
+      return stillVisible ? prev : null
+    })
+  }
 
   return (
     <div className="flex h-full flex-col overflow-hidden">
@@ -111,7 +180,7 @@ export default function AlertsView() {
             <button
               key={f}
               type="button"
-              onClick={() => setFilter(f)}
+              onClick={() => handleFilter(f)}
               className={`flex items-center gap-1.5 text-[13px] capitalize transition-colors
                 ${isActive ? 'font-semibold text-ink' : 'text-ink-3 hover:text-ink-2'}`}
               style={isActive && color ? { color } : undefined}
@@ -126,28 +195,28 @@ export default function AlertsView() {
         </span>
       </div>
 
-      {/* Feed — no column headers, no spreadsheet grid */}
+      {/* Feed — collapse non-matching rows in place; layout animates the reflow */}
       <div className="flex-1 overflow-y-auto px-8">
-        <div className="divide-y divide-line/70">
-          <AnimatePresence initial={false}>
-            {filtered.map((alert, i) => (
-              <motion.div
-                key={alert.id}
-                initial={{ opacity: 0, y: 8 }}
-                animate={{ opacity: 1, y: 0 }}
-                exit={{ opacity: 0 }}
-                transition={{ duration: 0.35, delay: i * 0.03 }}
-              >
-                <AlertRow
+        <LayoutGroup>
+          <motion.div layout className="overflow-hidden">
+            {MORE_ALERTS.map(alert => {
+              const visible = filter === 'all' || alert.severity === filter
+              return (
+                <FilterableAlertRow
+                  key={alert.id}
                   alert={alert}
-                  isOpen={openId === alert.id}
-                  onToggle={() => setOpenId(prev => (prev === alert.id ? null : alert.id))}
+                  visible={visible}
+                  isOpen={visible && openId === alert.id}
+                  onToggle={() => setUserOpenId(prev => (prev === alert.id ? null : alert.id))}
+                  onAction={show}
                 />
-              </motion.div>
-            ))}
-          </AnimatePresence>
-        </div>
+              )
+            })}
+          </motion.div>
+        </LayoutGroup>
       </div>
+
+      <ToastHost />
     </div>
   )
 }

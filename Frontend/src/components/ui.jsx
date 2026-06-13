@@ -1,5 +1,6 @@
 /* eslint-disable react-refresh/only-export-components -- shared primitives module: mixes components, hooks, and tokens by design */
 import { useEffect, useState, useRef } from 'react'
+import { AnimatePresence, motion } from 'motion/react'
 
 /* Shared primitives for the Liquid Glass Ledger system. */
 
@@ -135,6 +136,47 @@ export function SectionLabel({ children, right }) {
       {right}
     </div>
   )
+}
+
+const TOAST_DURATION_MS = 3000
+
+/** Brief bottom toast — auto-dismisses after ~3s. */
+export function useToast() {
+  const [toasts, setToasts] = useState([])
+
+  const show = (message) => {
+    const id = `${Date.now()}-${Math.random().toString(36).slice(2)}`
+    setToasts(prev => [...prev, { id, message }])
+    setTimeout(() => {
+      setToasts(prev => prev.filter(t => t.id !== id))
+    }, TOAST_DURATION_MS)
+  }
+
+  function ToastHost() {
+    return (
+      <div
+        aria-live="polite"
+        className="pointer-events-none fixed bottom-6 left-1/2 z-50 flex w-full max-w-sm -translate-x-1/2 flex-col items-center gap-2 px-4"
+      >
+        <AnimatePresence initial={false}>
+          {toasts.map(t => (
+            <motion.div
+              key={t.id}
+              initial={{ opacity: 0, y: 10, scale: 0.97 }}
+              animate={{ opacity: 1, y: 0, scale: 1 }}
+              exit={{ opacity: 0, y: 6, scale: 0.98 }}
+              transition={{ duration: 0.26, ease: [0.22, 1, 0.36, 1] }}
+              className="glass w-full rounded-lg px-4 py-3 text-center text-[13px] font-medium text-ink"
+            >
+              {t.message}
+            </motion.div>
+          ))}
+        </AnimatePresence>
+      </div>
+    )
+  }
+
+  return { show, ToastHost }
 }
 
 export function TH({ children, className = '', ...props }) {
