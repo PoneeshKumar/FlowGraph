@@ -60,7 +60,7 @@ class BasePaymentEvent(BaseModel):
     timestamp_utc: datetime
 
     # the original untouched payload
-    raw_payload: dict[str, Any] = Field(default_factor=dict)
+    raw_payload: dict[str, Any] = Field(default_factory=dict)
 
     @field_validator("timestamp_utc", mode="before")
     @classmethod
