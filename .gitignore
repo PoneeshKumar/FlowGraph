@@ -33,3 +33,7 @@ lerna-debug.log*
 *.njsproj
 *.sln
 *.sw?
+
+# Benchmark data and results (large files — download manually from Kaggle)
+Backend/benchmarks/data/
+Backend/benchmarks/results/
