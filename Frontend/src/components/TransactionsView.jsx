@@ -18,15 +18,15 @@ const EXTRA = [
 ]
 const ALL_HISTORY = [...RECENT_TRANSACTIONS, ...EXTRA]
 
-const railChip = 'rounded border border-line bg-hover px-1.5 py-px font-mono text-[10px] text-ink-2'
+const railChip = 'font-mono text-[10px] text-ink-3'
 const cellId   = 'px-4 py-2.5 font-mono text-[10.5px] text-ink-3 first:pl-7'
 const cellAcct = 'px-4 py-2.5 font-mono text-[11px] text-ink-2'
 const cellAmt  = 'whitespace-nowrap px-4 py-2.5 font-mono text-xs font-semibold text-ink tnum'
-const rowBase  = 'border-b border-line transition-colors duration-150 hover:bg-hover'
+const rowBase  = 'transition-colors duration-150 hover:bg-hover'
 
 function SectionHeader({ children, right }) {
   return (
-    <div className="flex items-center justify-between border-b border-line bg-hover px-7 py-2">
+    <div className="flex items-center justify-between px-8 py-2">
       <span className="text-[10.5px] font-bold uppercase tracking-[0.12em] text-ink-2">{children}</span>
       {right}
     </div>
@@ -36,10 +36,10 @@ function SectionHeader({ children, right }) {
 /* ── ACH batch row with drill-down ── */
 function AchBatchRow({ batch, isExpanded, onToggle }) {
   return (
-    <div className="border-b border-line">
+    <div>
       <div
         onClick={onToggle}
-        className={`flex cursor-pointer items-center gap-3.5 px-7 py-3 transition-colors duration-150 ${isExpanded ? 'bg-hover' : 'hover:bg-hover'}`}
+        className="flex cursor-pointer items-center gap-3.5 px-8 py-3 transition-colors duration-150 hover:bg-hover"
       >
         <motion.svg
           width="14" height="14" viewBox="0 0 14 14" fill="none"
@@ -86,7 +86,7 @@ function AchBatchRow({ batch, isExpanded, onToggle }) {
               animate={{ opacity: 1, y: 0, filter: 'blur(0px)' }}
               exit={{ opacity: 0, transition: { duration: 0.15 } }}
               transition={{ duration: 0.42, delay: 0.07, ease: [0.22, 1, 0.36, 1] }}
-              className="border-t border-line bg-hover/50">
+              className="border-t border-line/60">
               <table className="w-full border-collapse">
                 <thead>
                   <tr className="border-b border-line">
@@ -142,14 +142,14 @@ function InFlightTab() {
   return (
     <div>
       {/* Summary band */}
-      <div className="grid grid-cols-3 border-b border-line">
+      <div className="grid grid-cols-3">
         {summary.map((s, i) => (
           <motion.div
             key={s.label}
             initial={{ opacity: 0, y: 8 }}
             animate={{ opacity: 1, y: 0 }}
             transition={{ delay: i * 0.05, duration: 0.35, ease: [0.32, 0.72, 0, 1] }}
-            className={`px-7 py-3.5 ${i > 0 ? 'border-l border-line' : ''}`}
+            className="px-8 py-3.5"
           >
             <div className="mb-1 text-[10px] font-bold uppercase tracking-[0.1em] text-ink-3">{s.label}</div>
             <div className="font-mono text-lg font-semibold leading-none text-ink tnum">{s.value}</div>
@@ -254,8 +254,8 @@ const HISTORY_COLS = [
   { label: 'Time',        col: 'ts' },
 ]
 
-function HistoryTab() {
-  const [search, setSearch] = useState('')
+function HistoryTab({ initialSearch = '' }) {
+  const [search, setSearch] = useState(initialSearch)
   const [riskFilter, setRiskFilter] = useState('all')
   const [sortBy, setSortBy] = useState('ts')
   const [sortDir, setSortDir] = useState('desc')
@@ -286,8 +286,8 @@ function HistoryTab() {
   return (
     <div>
       {/* Filter strip */}
-      <div className="flex flex-wrap items-center gap-2 border-b border-line px-7 py-2.5">
-        <div className="flex items-center gap-2 rounded-lg border border-line px-3 py-1.5 transition-colors duration-200 focus-within:border-line-2">
+      <div className="flex flex-wrap items-center gap-2 px-8 py-2.5">
+        <div className="flex items-center gap-2 border-b border-line px-0 py-1.5 transition-colors duration-200 focus-within:border-line-2">
           <svg width="12" height="12" viewBox="0 0 12 12" fill="none" className="text-ink-3">
             <circle cx="5" cy="5" r="3.5" stroke="currentColor" strokeWidth="1.3"/>
             <path d="M7.5 7.5l3 3" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round"/>
@@ -314,7 +314,7 @@ function HistoryTab() {
               {isActive && (
                 <motion.span
                   layoutId="history-filter-pill"
-                  className="absolute inset-0 rounded-full bg-hover ring-1 ring-line-2"
+                  className="absolute inset-0 rounded-full bg-hover"
                   transition={{ type: 'spring', stiffness: 420, damping: 34 }}
                 />
               )}
@@ -378,7 +378,7 @@ function HistoryTab() {
         </tbody>
       </table>
 
-      <div className="flex items-center justify-between px-7 py-2.5">
+      <div className="flex items-center justify-between px-8 py-2.5">
         <span className="text-[11px] text-ink-3 tnum">
           Showing <span className="font-mono text-ink-2">{filtered.length}</span> of {ALL_HISTORY.length} settled transactions
         </span>
@@ -388,7 +388,7 @@ function HistoryTab() {
               key={p}
               className={`flex h-[26px] w-[26px] items-center justify-center rounded-lg text-xs transition-colors duration-150
                 ${p === '1'
-                  ? 'bg-accent/10 font-semibold text-accent ring-1 ring-accent/25'
+                  ? 'bg-accent/8 font-semibold text-accent'
                   : 'text-ink-3 hover:bg-hover hover:text-ink-2'}`}
             >
               {p}
@@ -406,8 +406,10 @@ const TABS = [
   { id: 'history',  label: 'History',   badge: ALL_HISTORY.length },
 ]
 
-export default function TransactionsView() {
-  const [activeTab, setActiveTab] = useState('inflight')
+export default function TransactionsView({ navContext }) {
+  const historySearch = navContext?.txnId ?? navContext?.search ?? navContext?.account ?? ''
+  const [manualTab, setManualTab] = useState('inflight')
+  const activeTab = historySearch ? 'history' : manualTab
   const [liveCount, setLiveCount] = useState(88421)
 
   useEffect(() => {
@@ -442,26 +444,19 @@ export default function TransactionsView() {
         )}
       </PageHeader>
 
-      {/* Tabs — flat strip */}
-      <div className="flex shrink-0 gap-1 border-b border-line px-7 py-2">
+      {/* Tabs — text only */}
+      <div className="flex shrink-0 gap-6 px-8 pb-4">
         {TABS.map(tab => {
           const isActive = activeTab === tab.id
           return (
             <button
               key={tab.id}
-              onClick={() => setActiveTab(tab.id)}
-              className={`relative flex items-center gap-2 rounded-full px-4 py-1.5 text-[13px] tracking-tight transition-colors duration-200
+              onClick={() => setManualTab(tab.id)}
+              className={`flex items-center gap-2 text-[13px] transition-colors duration-200
                 ${isActive ? 'font-semibold text-accent' : 'text-ink-3 hover:text-ink-2'}`}
             >
-              {isActive && (
-                <motion.span
-                  layoutId="txn-tab-pill"
-                  className="absolute inset-0 rounded-full bg-accent/10 ring-1 ring-accent/25"
-                  transition={{ type: 'spring', stiffness: 420, damping: 34 }}
-                />
-              )}
-              <span className="relative z-[1]">{tab.label}</span>
-              <span className="relative z-[1] font-mono text-[10px] tnum opacity-70">{tab.badge}</span>
+              {tab.label}
+              <span className="font-mono text-[11px] tnum opacity-60">{tab.badge}</span>
             </button>
           )
         })}
@@ -476,7 +471,7 @@ export default function TransactionsView() {
             exit={{ opacity: 0, y: -6 }}
             transition={{ duration: 0.22, ease: [0.32, 0.72, 0, 1] }}
           >
-            {activeTab === 'inflight' ? <InFlightTab /> : <HistoryTab />}
+            {activeTab === 'inflight' ? <InFlightTab /> : <HistoryTab key={historySearch || 'history'} initialSearch={historySearch} />}
           </motion.div>
         </AnimatePresence>
       </div>
