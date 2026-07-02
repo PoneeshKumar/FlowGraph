@@ -58,3 +58,33 @@ METRICS_REPORT_INTERVAL_SECONDS = int(os.getenv("METRICS_REPORT_INTERVAL_SECONDS
 
 # ==================== LOGGING ====================
 LOG_LEVEL = os.getenv("LOG_LEVEL", "INFO")
+
+# ==================== FRAUD DETECTION ====================
+# Cycle detection — transaction-level DFS over TRANSFER edges.
+# All values are tunable via env vars; defaults reflect CLAUDE.md spec.
+
+CYCLE_MAX_DEPTH = int(os.getenv("CYCLE_MAX_DEPTH", "6"))
+# Max hops in a cycle (clamped to [2, 6] in neo4j.find_cycles)
+
+CYCLE_WINDOW_HOURS = int(os.getenv("CYCLE_WINDOW_HOURS", "48"))
+# Look-back window: only consider TRANSFER edges within this many hours
+
+CYCLE_MAX_HOP_GAP_HOURS = float(os.getenv("CYCLE_MAX_HOP_GAP_HOURS", "24.0"))
+# Max hours allowed between consecutive hops (same flow, not coincidence)
+
+CYCLE_MAX_LEAK = float(os.getenv("CYCLE_MAX_LEAK", "0.20"))
+# Max fractional value bleed-off per hop (0.20 = up to 20% fees/cuts allowed)
+
+CYCLE_MIN_VALUE_CENTS = int(os.getenv("CYCLE_MIN_VALUE_CENTS", "100000"))
+# Minimum weakest-hop amount to flag ($1,000 — ignore trivial/noise cycles)
+
+CYCLE_MAX_RESULTS = int(os.getenv("CYCLE_MAX_RESULTS", "20"))
+# Cap on cycles returned per account per detection run
+
+CYCLE_FAST_CLOSE_HOURS = float(os.getenv("CYCLE_FAST_CLOSE_HOURS", "24.0"))
+# Velocity scoring knee: loops closing faster than this score higher for velocity
+
+# Score thresholds → risk level (lower-bound, inclusive)
+CYCLE_LEVEL_MEDIUM = float(os.getenv("CYCLE_LEVEL_MEDIUM", "0.40"))
+CYCLE_LEVEL_HIGH = float(os.getenv("CYCLE_LEVEL_HIGH", "0.65"))
+CYCLE_LEVEL_CRITICAL = float(os.getenv("CYCLE_LEVEL_CRITICAL", "0.85"))
