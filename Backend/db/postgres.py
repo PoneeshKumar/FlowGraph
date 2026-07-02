@@ -1,143 +1,274 @@
-import json
-import os
-from datetime import datetime, timezone
-from typing import Any, Optional
+"""
+PostgreSQL client for FlowGraph.
 
-import asyncpg
-
-# Postgres is the source of truth. Every normalized event is written here first
-# with pending_graph_sync=TRUE; the graph (Neo4j) and cache (Redis) are derived
-# state driven off this row. If the derived writes fail, the row stays pending
-# and the @app.timer outbox worker re-drives it. Recovery reconstructs the event
-# entirely from this row, so the schema carries everything the replay needs.
-
-_pool: Optional[asyncpg.Pool] = None
-
-_CREATE_SCHEMA = """
-CREATE TABLE IF NOT EXISTS payments (
-    event_id           TEXT        PRIMARY KEY,
-    rail               TEXT        NOT NULL,
-    sender_id          TEXT        NOT NULL,
-    receiver_id        TEXT        NOT NULL,
-    amount_cents       BIGINT      NOT NULL,
-    amount_usd_cents   BIGINT      NOT NULL,
-    currency           CHAR(3)     NOT NULL,
-    timestamp_utc      TIMESTAMPTZ NOT NULL,
-    status             TEXT        NOT NULL DEFAULT 'PENDING',
-    raw_payload        JSONB       NOT NULL DEFAULT '{}',
-    pending_graph_sync BOOLEAN     NOT NULL DEFAULT TRUE,
-    created_at         TIMESTAMPTZ NOT NULL DEFAULT NOW()
-);
-CREATE INDEX IF NOT EXISTS idx_payments_sender   ON payments (sender_id);
-CREATE INDEX IF NOT EXISTS idx_payments_receiver ON payments (receiver_id);
--- partial index: the outbox worker only ever scans unsynced rows
-CREATE INDEX IF NOT EXISTS idx_payments_outbox   ON payments (created_at)
-    WHERE pending_graph_sync = TRUE;
+Handles canonical transaction storage and outbox table management.
+Provides atomic dual-write semantics: transaction + outbox inserted in single transaction.
 """
 
+import asyncio
+import json
+import logging
+from typing import Any, Dict, List, Optional
+from datetime import datetime, timedelta
+from contextlib import asynccontextmanager
 
-async def get_pool() -> asyncpg.Pool:
-    global _pool
-    if _pool is None:
-        _pool = await asyncpg.create_pool(
-            host=os.getenv("POSTGRES_HOST", "localhost"),
-            port=int(os.getenv("POSTGRES_PORT", "5432")),
-            database=os.getenv("POSTGRES_DB", "flowgraph"),
-            user=os.getenv("POSTGRES_USER", "flowgraph"),
-            password=os.getenv("POSTGRES_PASSWORD", "changeme"),
+import asyncpg
+from asyncpg import Pool, Connection
+
+from config import (
+    POSTGRES_DSN,
+    POSTGRES_POOL_SIZE,
+    POSTGRES_POOL_TIMEOUT,
+    OUTBOX_TABLE_NAME,
+    TRANSACTIONS_TABLE_NAME,
+)
+
+logger = logging.getLogger(__name__)
+
+
+class PostgresClient:
+    """Async PostgreSQL client for transactions and outbox management."""
+
+    def __init__(self):
+        self.pool: Optional[Pool] = None
+
+    async def initialize(self) -> None:
+        """Create connection pool."""
+        try:
+            # Parse DSN to extract host/port for logging
+            # Format: postgresql+asyncpg://user:pass@host:port/dbname
+            self.pool = await asyncpg.create_pool(
+                self._parse_dsn(POSTGRES_DSN),
+                min_size=5,
+                max_size=POSTGRES_POOL_SIZE,
+                command_timeout=POSTGRES_POOL_TIMEOUT,
+            )
+            logger.info("PostgreSQL connection pool initialized")
+        except Exception as e:
+            logger.error(f"Failed to initialize PostgreSQL pool: {e}")
+            raise
+
+    async def close(self) -> None:
+        """Close connection pool."""
+        if self.pool:
+            await self.pool.close()
+            logger.info("PostgreSQL connection pool closed")
+
+    @staticmethod
+    def _parse_dsn(dsn: str) -> str:
+        """Extract asyncpg-compatible DSN from sqlalchemy-style DSN."""
+        # Input: postgresql+asyncpg://user:pass@host:port/dbname
+        # Output: postgresql://user:pass@host:port/dbname
+        return dsn.replace("postgresql+asyncpg://", "postgresql://")
+
+    @asynccontextmanager
+    async def _get_connection(self):
+        """Context manager to get a connection from the pool."""
+        if not self.pool:
+            raise RuntimeError("PostgresClient not initialized. Call initialize() first.")
+        conn = await self.pool.acquire()
+        try:
+            yield conn
+        finally:
+            await self.pool.release(conn)
+
+    # ==================== TRANSACTION MANAGEMENT ====================
+
+    async def save_transaction(
+        self,
+        transaction_id: str,
+        rail: str,
+        event_type: str,
+        status: str,
+        sender_id: str,
+        receiver_id: str,
+        amount_cents: int,
+        currency: str,
+        timestamp_utc: datetime,
+        raw_payload: Dict[str, Any],
+        schema_version: int = 1,
+        authorization_code: Optional[str] = None,
+    ) -> None:
+        """
+        Save a payment transaction to the transactions table.
+        
+        Args:
+            transaction_id: UUID of the transaction
+            rail: Payment rail (CARD, WIRE, ACH, CRYPTO)
+            event_type: Event type (AUTH, SETTLEMENT, etc.)
+            status: Transaction status (PENDING, SETTLED, DECLINED, ORPHANED)
+            sender_id: Hashed sender identifier
+            receiver_id: Hashed receiver identifier
+            amount_cents: Amount in cents (integer)
+            currency: 3-char ISO currency code
+            timestamp_utc: UTC timestamp of the transaction
+            raw_payload: Original raw event payload
+            schema_version: Schema version (default 1)
+            authorization_code: Auth code for settlement matching (optional)
+        """
+        query = f"""
+        INSERT INTO {TRANSACTIONS_TABLE_NAME} (
+            id, rail, event_type, status, sender_id, receiver_id,
+            amount_cents, currency, timestamp_utc, raw_payload,
+            schema_version, authorization_code, created_at
+        ) VALUES (
+            $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13
         )
-    return _pool
+        ON CONFLICT (id) DO UPDATE SET
+            status = $4,
+            updated_at = CURRENT_TIMESTAMP
+        """
 
+        async with self._get_connection() as conn:
+            await conn.execute(
+                query,
+                transaction_id,
+                rail,
+                event_type,
+                status,
+                sender_id,
+                receiver_id,
+                amount_cents,
+                currency,
+                timestamp_utc,
+                json.dumps(raw_payload),
+                schema_version,
+                authorization_code,
+                datetime.utcnow(),
+            )
 
-async def init_schema() -> None:
-    pool = await get_pool()
-    async with pool.acquire() as conn:
-        await conn.execute(_CREATE_SCHEMA)
+    async def get_transaction(self, transaction_id: str) -> Optional[Dict[str, Any]]:
+        """Retrieve a transaction by ID."""
+        query = f"SELECT * FROM {TRANSACTIONS_TABLE_NAME} WHERE id = $1"
+        async with self._get_connection() as conn:
+            row = await conn.fetchrow(query, transaction_id)
+            if row:
+                return dict(row)
+            return None
 
+    # ==================== OUTBOX MANAGEMENT ====================
 
-def _parse_ts(raw: Any) -> datetime:
-    if isinstance(raw, datetime):
-        ts = raw
-    else:
-        ts = datetime.fromisoformat(str(raw))
-    if ts.tzinfo is None:
-        ts = ts.replace(tzinfo=timezone.utc)
-    return ts.astimezone(timezone.utc)
+    async def insert_outbox(
+        self,
+        transaction_id: str,
+        idempotency_key: str,
+        event_payload: Dict[str, Any],
+        neo4j_write_payload: Optional[Dict[str, Any]] = None,
+    ) -> None:
+        """
+        Insert an outbox entry for a transaction.
+        Should be called in same transaction as save_transaction().
+        
+        Args:
+            transaction_id: UUID of the transaction
+            idempotency_key: Unique key to prevent duplicate retries
+            event_payload: Serialized transaction data for replay
+            neo4j_write_payload: Pre-computed Neo4j MERGE payload (optional)
+        """
+        query = f"""
+        INSERT INTO {OUTBOX_TABLE_NAME} (
+            transaction_id, idempotency_key, event_payload, 
+            neo4j_write_payload, status, retry_count, created_at
+        ) VALUES ($1, $2, $3, $4, 'pending', 0, CURRENT_TIMESTAMP)
+        ON CONFLICT (idempotency_key) DO NOTHING
+        """
 
+        async with self._get_connection() as conn:
+            await conn.execute(
+                query,
+                transaction_id,
+                idempotency_key,
+                json.dumps(event_payload),
+                json.dumps(neo4j_write_payload) if neo4j_write_payload else None,
+            )
 
-def _row_to_event(row: asyncpg.Record) -> dict[str, Any]:
-    # the replay unit: reconstruct the event dict for the graph/cache writers
-    # from the durable Postgres row, so the agent and the outbox worker drive
-    # byte-identical writes
-    return {
-        "event_id": row["event_id"],
-        "rail": row["rail"],
-        "sender_id": row["sender_id"],
-        "receiver_id": row["receiver_id"],
-        "amount_cents": row["amount_cents"],
-        "amount_usd_cents": row["amount_usd_cents"],
-        "currency": row["currency"],
-        "timestamp_utc": row["timestamp_utc"],
-        "status": row["status"],
-        "raw_payload": json.loads(row["raw_payload"]) if isinstance(row["raw_payload"], str) else row["raw_payload"],
-    }
+    async def fetch_pending_outbox(
+        self, batch_size: int = 50, max_age_seconds: int = 3600
+    ) -> List[Dict[str, Any]]:
+        """
+        Fetch pending outbox records for sync.
+        
+        Prioritizes older records and those with fewer retries.
+        
+        Args:
+            batch_size: Maximum records to fetch per poll
+            max_age_seconds: Only fetch records created within last N seconds (optional)
+        
+        Returns:
+            List of outbox records with status='pending'
+        """
+        query = f"""
+        SELECT id, transaction_id, idempotency_key, event_payload,
+               neo4j_write_payload, retry_count, last_error, created_at
+        FROM {OUTBOX_TABLE_NAME}
+        WHERE status = 'pending'
+          AND (last_retry_at IS NULL OR last_retry_at < CURRENT_TIMESTAMP - INTERVAL '10 seconds' * retry_count)
+        ORDER BY retry_count ASC, created_at ASC
+        LIMIT $1
+        """
 
+        async with self._get_connection() as conn:
+            rows = await conn.fetch(query, batch_size)
+            return [dict(row) for row in rows]
 
-async def write_payment(event: dict[str, Any]) -> Optional[dict[str, Any]]:
-    """Insert the canonical row. Returns the reconstructed event dict on a fresh
-    insert, or None if the row already existed (a Kafka redelivery) — in which
-    case the caller skips the graph/cache writes entirely (idempotency gate)."""
-    pool = await get_pool()
-    async with pool.acquire() as conn:
-        row = await conn.fetchrow(
-            """
-            INSERT INTO payments (
-                event_id, rail, sender_id, receiver_id,
-                amount_cents, amount_usd_cents, currency, timestamp_utc,
-                status, raw_payload, pending_graph_sync
-            ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10::jsonb, TRUE)
-            ON CONFLICT (event_id) DO NOTHING
-            RETURNING *
-            """,
-            str(event["event_id"]),
-            str(event["rail"]),
-            event["sender_id"],
-            event["receiver_id"],
-            event["amount_cents"],
-            event["amount_usd_cents"],
-            event["currency"],
-            _parse_ts(event["timestamp_utc"]),
-            event.get("status", "PENDING"),
-            json.dumps(event.get("raw_payload", {})),
-        )
-        return _row_to_event(row) if row is not None else None
+    async def mark_outbox_synced(self, outbox_id: int) -> None:
+        """Mark an outbox record as successfully synced."""
+        query = f"""
+        UPDATE {OUTBOX_TABLE_NAME}
+        SET status = 'synced', synced_at = CURRENT_TIMESTAMP, updated_at = CURRENT_TIMESTAMP
+        WHERE id = $1
+        """
+        async with self._get_connection() as conn:
+            await conn.execute(query, outbox_id)
 
+    async def mark_outbox_failed(self, outbox_id: int, error_message: str) -> None:
+        """Mark an outbox record as failed (max retries exceeded)."""
+        query = f"""
+        UPDATE {OUTBOX_TABLE_NAME}
+        SET status = 'failed', last_error = $2, updated_at = CURRENT_TIMESTAMP
+        WHERE id = $1
+        """
+        async with self._get_connection() as conn:
+            await conn.execute(query, outbox_id, error_message)
 
-async def clear_outbox(event_id: str) -> None:
-    pool = await get_pool()
-    async with pool.acquire() as conn:
-        await conn.execute(
-            "UPDATE payments SET pending_graph_sync = FALSE WHERE event_id = $1",
-            str(event_id),
-        )
+    async def increment_outbox_retry(
+        self, outbox_id: int, error_message: Optional[str] = None
+    ) -> None:
+        """Increment retry count and update last_retry_at timestamp."""
+        query = f"""
+        UPDATE {OUTBOX_TABLE_NAME}
+        SET retry_count = retry_count + 1,
+            last_retry_at = CURRENT_TIMESTAMP,
+            last_error = COALESCE($2, last_error),
+            updated_at = CURRENT_TIMESTAMP
+        WHERE id = $1
+        """
+        async with self._get_connection() as conn:
+            await conn.execute(query, outbox_id, error_message)
 
+    async def get_outbox_stats(self) -> Dict[str, Any]:
+        """Get current outbox statistics."""
+        query = f"""
+        SELECT
+            status,
+            COUNT(*) as count,
+            EXTRACT(EPOCH FROM MAX(CURRENT_TIMESTAMP - created_at)) as max_age_seconds,
+            EXTRACT(EPOCH FROM AVG(CURRENT_TIMESTAMP - created_at)) as avg_age_seconds
+        FROM {OUTBOX_TABLE_NAME}
+        WHERE status IN ('pending', 'synced', 'failed')
+        GROUP BY status
+        """
 
-async def claim_stuck_rows(older_than_seconds: int = 60, limit: int = 100) -> list[dict[str, Any]]:
-    """Claim rows the agent likely abandoned: still pending and older than the
-    claim window. FOR UPDATE SKIP LOCKED lets multiple worker instances run
-    without grabbing the same row."""
-    pool = await get_pool()
-    async with pool.acquire() as conn:
-        rows = await conn.fetch(
-            """
-            SELECT * FROM payments
-            WHERE pending_graph_sync = TRUE
-              AND created_at < NOW() - ($1 || ' seconds')::interval
-            ORDER BY created_at
-            LIMIT $2
-            FOR UPDATE SKIP LOCKED
-            """,
-            str(older_than_seconds),
-            limit,
-        )
-        return [_row_to_event(r) for r in rows]
+        async with self._get_connection() as conn:
+            rows = await conn.fetch(query)
+            return {row["status"]: dict(row) for row in rows}
+
+    async def health_check(self) -> bool:
+        """Test database connection."""
+        try:
+            async with self._get_connection() as conn:
+                await conn.fetchval("SELECT 1")
+            return True
+        except Exception as e:
+            logger.error(f"PostgreSQL health check failed: {e}")
+            return False

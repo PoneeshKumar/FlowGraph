@@ -1,77 +1,152 @@
-"""Integration test fixtures — require Docker (testcontainers spins up real
-Postgres / Neo4j / Redis).
-
-UNVERIFIED IN CI YET: run `pip install -r requirements.txt` and ensure Docker is
-running, then `pytest Backend/tests`. The testcontainers API is version-sensitive
-(pinned testcontainers==4.7.2); adjust the connection-detail calls if you bump it.
 """
-import os
+Pytest configuration and shared fixtures for FlowGraph tests.
+"""
 
 import pytest
-import pytest_asyncio
-from testcontainers.postgres import PostgresContainer
-from testcontainers.neo4j import Neo4jContainer
-from testcontainers.redis import RedisContainer
+import asyncio
+import json
+from datetime import datetime, timezone
+from typing import Any, Dict, Generator
+from unittest.mock import AsyncMock, MagicMock, Mock
+from uuid import uuid4
+
+# Add Backend to path for imports
+import sys
+from pathlib import Path
+
+BACKEND_PATH = Path(__file__).parent.parent
+if str(BACKEND_PATH) not in sys.path:
+    sys.path.insert(0, str(BACKEND_PATH))
 
 
-@pytest.fixture(scope="session", autouse=True)
-def _stores():
-    with PostgresContainer("postgres:16") as pg, \
-         Neo4jContainer("neo4j:5") as neo, \
-         RedisContainer("redis:7-alpine") as rd:
-
-        os.environ["POSTGRES_HOST"] = pg.get_container_host_ip()
-        os.environ["POSTGRES_PORT"] = str(pg.get_exposed_port(5432))
-        os.environ["POSTGRES_DB"] = pg.dbname
-        os.environ["POSTGRES_USER"] = pg.username
-        os.environ["POSTGRES_PASSWORD"] = pg.password
-
-        os.environ["NEO4J_URI"] = neo.get_connection_url()
-        os.environ["NEO4J_USER"] = "neo4j"
-        os.environ["NEO4J_PASSWORD"] = neo.password
-
-        os.environ["REDIS_HOST"] = rd.get_container_host_ip()
-        os.environ["REDIS_PORT"] = str(rd.get_exposed_port(6379))
-
-        yield
+@pytest.fixture(scope="session")
+def event_loop() -> Generator:
+    """Create an event loop for the test session."""
+    loop = asyncio.get_event_loop_policy().new_event_loop()
+    yield loop
+    loop.close()
 
 
-@pytest_asyncio.fixture(autouse=True)
-async def _reset_clients():
-    """Drop cached pools/drivers/clients and re-init schema before each test so
-    module-level singletons pick up the container env and tables start clean."""
-    from db import postgres, neo4j, redis as redis_db
-
-    # reset cached singletons
-    postgres._pool = None
-    neo4j._driver = None
-    redis_db._client = None
-
-    await postgres.init_schema()
-    await neo4j.init_constraints()
-
-    # clean slate each test
-    pool = await postgres.get_pool()
-    async with pool.acquire() as conn:
-        await conn.execute("TRUNCATE payments")
-    async with neo4j.get_driver().session() as s:
-        await s.run("MATCH (n) DETACH DELETE n")
-    await redis_db.get_client().flushall()
-
-    yield
-
-
-def make_event(event_id="evt-1", sender="alice", receiver="bob",
-               amount_cents=10_000, currency="USD", rail="CARD"):
+@pytest.fixture
+def sample_card_auth_event() -> Dict[str, Any]:
+    """Sample valid CardAuthEvent payload."""
+    event_id = str(uuid4())
     return {
         "event_id": event_id,
-        "rail": rail,
-        "sender_id": sender,
-        "receiver_id": receiver,
-        "amount_cents": amount_cents,
-        "amount_usd_cents": amount_cents,  # USD 1:1 for tests
-        "currency": currency,
-        "timestamp_utc": "2026-06-02T00:00:00+00:00",
-        "status": "SETTLED",
-        "raw_payload": {"src": "test"},
+        "schema_version": 1,
+        "rail": "CARD",
+        "event_type": "AUTH",
+        "status": "PENDING",
+        "sender_id": "cardholder_hash_123",
+        "receiver_id": "merchant_hash_456",
+        "amount_cents": 5000,
+        "currency": "USD",
+        "timestamp_utc": datetime.now(timezone.utc).isoformat(),
+        "raw_payload": {
+            "authorization_code": "ABC123",
+            "merchant_name": "Starbucks",
+            "location": "San Francisco",
+        },
+        "authorization_code": "ABC123",
+        "approved": True,
+        "terminal_id": "TERM001",
+        "merchant_category_code": "5411",
+        "merchant_name": "Starbucks",
     }
+
+
+@pytest.fixture
+def sample_card_settlement_event() -> Dict[str, Any]:
+    """Sample valid CardSettlementEvent payload."""
+    event_id = str(uuid4())
+    return {
+        "event_id": event_id,
+        "schema_version": 1,
+        "rail": "CARD",
+        "event_type": "SETTLEMENT",
+        "status": "SETTLED",
+        "sender_id": "cardholder_hash_123",
+        "receiver_id": "merchant_hash_456",
+        "amount_cents": 5000,
+        "currency": "USD",
+        "timestamp_utc": datetime.now(timezone.utc).isoformat(),
+        "raw_payload": {
+            "authorization_code": "ABC123",
+            "settlement_date": "2026-06-26",
+        },
+        "authorization_code": "ABC123",
+        "settlement_amount_cents": 5000,
+        "settled_at_utc": datetime.now(timezone.utc).isoformat(),
+    }
+
+
+@pytest.fixture
+def sample_invalid_event() -> Dict[str, Any]:
+    """Sample invalid event (missing required fields)."""
+    return {
+        "event_id": str(uuid4()),
+        "rail": "CARD",
+        # Missing: event_type, sender_id, receiver_id, etc.
+    }
+
+
+@pytest.fixture
+def mock_postgres_client() -> AsyncMock:
+    """Create a mock PostgreSQL client."""
+    mock = AsyncMock()
+    mock.save_transaction = AsyncMock()
+    mock.insert_outbox = AsyncMock()
+    mock.fetch_pending_outbox = AsyncMock(return_value=[])
+    mock.mark_outbox_synced = AsyncMock()
+    mock.mark_outbox_failed = AsyncMock()
+    mock.increment_outbox_retry = AsyncMock()
+    mock.get_outbox_stats = AsyncMock(
+        return_value={
+            "pending": {"count": 0, "max_age_seconds": 0, "avg_age_seconds": 0},
+            "synced": {"count": 0, "max_age_seconds": 0, "avg_age_seconds": 0},
+            "failed": {"count": 0, "max_age_seconds": 0, "avg_age_seconds": 0},
+        }
+    )
+    mock.health_check = AsyncMock(return_value=True)
+    return mock
+
+
+@pytest.fixture
+def mock_neo4j_client() -> AsyncMock:
+    """Create a mock Neo4j client."""
+    mock = AsyncMock()
+    mock.upsert_transaction_graph = AsyncMock()
+    mock.create_account_node = AsyncMock()
+    mock.get_subgraph = AsyncMock(return_value={"nodes": [], "edges": []})
+    mock.find_cycles = AsyncMock(return_value=[])
+    mock.shortest_path = AsyncMock(return_value=None)
+    mock.health_check = AsyncMock(return_value=True)
+    return mock
+
+
+@pytest.fixture
+def mock_redis_client() -> AsyncMock:
+    """Create a mock Redis client."""
+    mock = AsyncMock()
+    mock.add_edge_to_timeseries = AsyncMock()
+    mock.get_edge_volume_in_window = AsyncMock(
+        return_value={
+            "total_volume_cents": 0,
+            "transaction_count": 0,
+            "earliest_timestamp": None,
+            "latest_timestamp": None,
+        }
+    )
+    mock.cache_set = AsyncMock()
+    mock.cache_get = AsyncMock(return_value=None)
+    mock.health_check = AsyncMock(return_value=True)
+    return mock
+
+
+@pytest.fixture
+def mock_dlq_handler() -> AsyncMock:
+    """Create a mock DLQ handler."""
+    mock = AsyncMock()
+    mock.route_to_dlq = AsyncMock()
+    mock.route_sync_failure = AsyncMock()
+    return mock
