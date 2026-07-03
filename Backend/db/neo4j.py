@@ -31,6 +31,8 @@ from config import (
     CYCLE_MAX_LEAK,
     CYCLE_MIN_VALUE_CENTS,
     CYCLE_MAX_RESULTS,
+    CYCLE_CONSERVATION_MODE,
+    CYCLE_MAX_CYCLE_LEAK,
 )
 
 logger = logging.getLogger(__name__)
@@ -204,6 +206,8 @@ class Neo4jClient:
         min_cycle_cents: int = CYCLE_MIN_VALUE_CENTS,
         max_results: int = CYCLE_MAX_RESULTS,
         reference_time: Optional[datetime] = None,
+        conservation_mode: str = CYCLE_CONSERVATION_MODE,
+        max_cycle_leak: float = CYCLE_MAX_CYCLE_LEAK,
     ) -> List[Dict[str, Any]]:
         """
         Find transaction-level circular flows starting from a given account.
@@ -264,10 +268,35 @@ class Neo4jClient:
         # `ft` is the per-hop representative time (first_ts). Index i+1 wraps to 0 so the
         # descent count is computed over the full circular sequence.
         #
-        # Conservation uses range-overlap on the aggregate min/max envelope (not max-to-max,
-        # which compares unrelated parallel txns): consecutive same-currency hops must have
-        # overlapping amount ranges within the leak tolerance, i.e. some pair of txns across
-        # the two hops could form a conserved step. Cross-currency hops skip it (FX).
+        # Conservation has three modes (config CYCLE_CONSERVATION_MODE):
+        #   "hop"   — per-hop range-overlap on the aggregate min/max envelope: consecutive
+        #             same-currency hops must have overlapping amount ranges within max_leak
+        #             (some pair of txns across the two hops forms a conserved step).
+        #             Cross-currency hops skip it (FX makes cents incomparable).
+        #   "cycle" — whole-ring magnitude consistency: the weakest hop's representative
+        #             amount is >= the strongest hop's × (1 - max_cycle_leak). Captures the
+        #             laundering signal (money returns to origin at similar magnitude) while
+        #             tolerating per-hop fee/split variation. Default.
+        #   "off"   — no amount conservation; topology + temporal + value floor only.
+        conservation_mode = (conservation_mode or "cycle").lower()
+        if conservation_mode == "hop":
+            conservation_clause = """
+          AND ALL(i IN range(0, n-2) WHERE
+                rels[i].rail <> rels[i+1].rail
+                OR (
+                  rels[i+1].min_amount <= rels[i].max_amount
+                  AND rels[i+1].max_amount >= toInteger(rels[i].min_amount * (1.0 - $max_leak))
+                ))"""
+        elif conservation_mode == "off":
+            conservation_clause = ""
+        else:  # "cycle" (default)
+            conservation_clause = """
+          AND reduce(mx = rels[0].max_amount, r IN rels |
+                CASE WHEN r.max_amount > mx THEN r.max_amount ELSE mx END)
+              * (1.0 - $max_cycle_leak)
+              <= reduce(mn = rels[0].max_amount, r IN rels |
+                CASE WHEN r.max_amount < mn THEN r.max_amount ELSE mn END)"""
+
         query = f"""
         MATCH path = (start:Account {{id: $account_id}})-[rels:FLOWS_TO*2..{max_depth}]->(start)
         WITH path, rels, [r IN rels | r.first_ts] AS ft, size(rels) AS n
@@ -276,13 +305,7 @@ class Neo4jClient:
                 (CASE WHEN i+1 = n THEN ft[0] ELSE ft[i+1] END) < ft[i]]) <= 1
           AND ALL(i IN range(0, n-1) WHERE
                 (CASE WHEN i+1 = n THEN ft[0] ELSE ft[i+1] END) < ft[i]
-                OR (CASE WHEN i+1 = n THEN ft[0] ELSE ft[i+1] END) - ft[i] <= $max_hop_gap_seconds)
-          AND ALL(i IN range(0, n-2) WHERE
-                rels[i].rail <> rels[i+1].rail
-                OR (
-                  rels[i+1].min_amount <= rels[i].max_amount
-                  AND rels[i+1].max_amount >= toInteger(rels[i].min_amount * (1.0 - $max_leak))
-                ))
+                OR (CASE WHEN i+1 = n THEN ft[0] ELSE ft[i+1] END) - ft[i] <= $max_hop_gap_seconds){conservation_clause}
           AND reduce(mn = rels[0].max_amount, r IN rels |
                 CASE WHEN r.max_amount < mn THEN r.max_amount ELSE mn END) >= $min_cycle_cents
         RETURN [nd IN nodes(path) | nd.id] AS node_ids,
@@ -300,6 +323,7 @@ class Neo4jClient:
                     window_start_epoch=window_start_epoch,
                     max_hop_gap_seconds=max_hop_gap_seconds,
                     max_leak=max_leak,
+                    max_cycle_leak=max_cycle_leak,
                     min_cycle_cents=min_cycle_cents,
                     max_results=max_results,
                 )

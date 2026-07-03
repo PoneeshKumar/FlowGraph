@@ -76,6 +76,24 @@ CYCLE_MAX_HOP_GAP_HOURS = float(os.getenv("CYCLE_MAX_HOP_GAP_HOURS", "72.0"))
 CYCLE_MAX_LEAK = float(os.getenv("CYCLE_MAX_LEAK", "0.20"))
 # Max fractional value bleed-off per hop (0.20 = up to 20% fees/cuts allowed)
 
+CYCLE_CONSERVATION_MODE = os.getenv("CYCLE_CONSERVATION_MODE", "hop").lower()
+# How to enforce amount conservation on aggregate FLOWS_TO cycles:
+#   "hop"   — per-hop range-overlap, skipping cross-currency hops. Best F1 on IBM AML
+#             (100% precision, 68.5% recall): correctly rejects coincidental rings that
+#             "off" lets through, and skip-cross-currency avoids FX numeric mismatch.
+#             Default.
+#   "cycle" — whole-ring magnitude consistency (weakest hop >= strongest × (1-max_cycle_leak)).
+#             Worse on multi-currency data: raw-cent magnitudes differ across currencies
+#             (Yuan cents ~7x USD cents for equal value), so FX trips the whole-ring check.
+#   "off"   — topology + temporal + value floor only. Highest raw recall (70.4%) but
+#             precision drops to 84% (coincidental rings). Use when the other detectors
+#             (PageRank hubs, Louvain communities) own precision.
+
+CYCLE_MAX_CYCLE_LEAK = float(os.getenv("CYCLE_MAX_CYCLE_LEAK", "0.60"))
+# For conservation_mode="cycle": max total magnitude spread across the whole ring.
+# 0.60 = weakest hop may be down to 40% of the strongest (accumulated fees/splits
+# around a multi-hop loop) and still count as one conserved flow.
+
 CYCLE_MIN_VALUE_CENTS = int(os.getenv("CYCLE_MIN_VALUE_CENTS", "10000"))
 # Minimum weakest-hop amount to flag ($100 — filters trivial test noise while
 # catching structuring below $1k thresholds)
