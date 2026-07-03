@@ -47,6 +47,12 @@ tuning knobs, by design:
     which the dataset does not carry.
   - >12-hop chains: these are community/layering structures, the job of the Louvain and
     PageRank detectors, not tight-cycle detection.
+
+On the 100% precision figure: it is measured against realistic noise, not isolated rings.
+Cycle accounts carry ~45% legitimate edges — in the ingested graph the 271 labeled accounts
+have ~569 within-ring edges AND ~474 edges to outside (non-laundering) accounts — so the
+detector must avoid stitching false rings through genuine neighbourhood traffic, and does.
+The disjoint background sample adds scale but cannot form rings through labeled accounts.
 """
 
 from __future__ import annotations
