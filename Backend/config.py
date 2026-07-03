@@ -101,6 +101,11 @@ CYCLE_MIN_VALUE_CENTS = int(os.getenv("CYCLE_MIN_VALUE_CENTS", "10000"))
 CYCLE_MAX_RESULTS = int(os.getenv("CYCLE_MAX_RESULTS", "20"))
 # Cap on cycles returned per account per detection run
 
+CYCLE_QUERY_TIMEOUT_SECONDS = float(os.getenv("CYCLE_QUERY_TIMEOUT_SECONDS", "10.0"))
+# Per-account cycle query transaction timeout. A fraud query must never hang the
+# pipeline; a timed-out search returns no cycle (correct for a miss) and bounds latency.
+# Raise for deep batch sweeps (depth 12), keep low (5-10s) for real-time streaming.
+
 CYCLE_FAST_CLOSE_HOURS = float(os.getenv("CYCLE_FAST_CLOSE_HOURS", "24.0"))
 # Velocity scoring knee: loops closing faster than this score higher for velocity
 

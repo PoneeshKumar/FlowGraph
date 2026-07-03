@@ -17,7 +17,7 @@ import logging
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
 
-from neo4j import AsyncGraphDatabase, AsyncDriver
+from neo4j import AsyncGraphDatabase, AsyncDriver, Query
 from neo4j.exceptions import ServiceUnavailable
 
 from config import (
@@ -33,6 +33,7 @@ from config import (
     CYCLE_MAX_RESULTS,
     CYCLE_CONSERVATION_MODE,
     CYCLE_MAX_CYCLE_LEAK,
+    CYCLE_QUERY_TIMEOUT_SECONDS,
 )
 
 logger = logging.getLogger(__name__)
@@ -208,6 +209,7 @@ class Neo4jClient:
         reference_time: Optional[datetime] = None,
         conservation_mode: str = CYCLE_CONSERVATION_MODE,
         max_cycle_leak: float = CYCLE_MAX_CYCLE_LEAK,
+        query_timeout_seconds: float = CYCLE_QUERY_TIMEOUT_SECONDS,
     ) -> List[Dict[str, Any]]:
         """
         Find transaction-level circular flows starting from a given account.
@@ -315,10 +317,16 @@ class Neo4jClient:
         LIMIT $max_results
         """
 
+        # Transaction timeout bounds the worst case: a deep fruitless search on a
+        # high-degree account must never stall the pipeline. On timeout Neo4j raises,
+        # which we treat as "no cycle from this account" — correct, since a search that
+        # can't finish in the budget yields no actionable flag.
+        timed_query = Query(query, timeout=query_timeout_seconds)
+
         try:
             async with self.driver.session(database=NEO4J_DATABASE) as session:
                 result = await session.run(
-                    query,
+                    timed_query,
                     account_id=account_id,
                     window_start_epoch=window_start_epoch,
                     max_hop_gap_seconds=max_hop_gap_seconds,
@@ -338,6 +346,15 @@ class Neo4jClient:
                     for record in records
                 ]
         except Exception as e:
+            # ClientError with code TransactionTimeoutClientError (or the driver's
+            # timeout) means the search exceeded its budget — treat as no cycle found
+            # rather than failing the whole detection pass.
+            if "timeout" in str(e).lower() or "Timeout" in type(e).__name__:
+                logger.warning(
+                    "Cycle query for %s exceeded %.1fs budget — treating as no cycle",
+                    account_id[:8], query_timeout_seconds,
+                )
+                return []
             logger.error(f"Failed to find cycles for {account_id}: {e}")
             raise
 

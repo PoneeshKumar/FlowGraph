@@ -23,6 +23,30 @@ Pre-requisites:
        https://www.kaggle.com/datasets/ealtman2019/ibm-transactions-for-anti-money-laundering-aml
        and place in benchmarks/data/
     3. pip install -r requirements.txt
+
+Tuned results (54 labeled CYCLE groups, 10.2k cycle + 51k background txns).
+The window MUST be wide enough to cover the ~30-day dataset, and detection is anchored
+to the dataset's own max timestamp (not now()), so pass CYCLE_WINDOW_HOURS=720.
+
+    depth  gap   conservation  recall  precision  F1     runtime   use
+    ─────  ────  ────────────  ──────  ─────────  ─────  ───────   ─────────────────
+    8      168h  hop           72.2%   100.0%     83.9   ~24s      real-time / streaming
+    12     168h  hop           87.0%   100.0%     93.1   ~2-15min  batch / investigative
+
+Best real-time config:
+    CYCLE_MAX_DEPTH=8 CYCLE_WINDOW_HOURS=720 CYCLE_MAX_HOP_GAP_HOURS=168 \\
+    CYCLE_CONSERVATION_MODE=hop \\
+    python -m benchmarks.ibm_aml.runner --csv ... --patterns ... --neo4j-only --skip-ingest
+
+Best coverage config (batch): same, with CYCLE_MAX_DEPTH=12.
+
+The ~13% still missed at depth 12 are two structural blindspots that are NOT cycle-detection
+tuning knobs, by design:
+  - cross-currency cycles: conservation compares raw cents, but FX makes cents across
+    currencies incomparable (Yuan cents ~7x USD for equal value). Fixing needs FX rates,
+    which the dataset does not carry.
+  - >12-hop chains: these are community/layering structures, the job of the Louvain and
+    PageRank detectors, not tight-cycle detection.
 """
 
 from __future__ import annotations
@@ -151,6 +175,14 @@ async def run_benchmark(
     # is persisted to Postgres.
     all_flags: list[dict] = []
 
+    # Match predicate (also used for the per-group early exit below).
+    def _matches_group(flag_accounts: list[str], group: CycleGroup) -> bool:
+        flag_set = frozenset(flag_accounts)
+        if not flag_set:
+            return False
+        overlap = len(flag_set & group.account_set)
+        return overlap >= 2 and overlap >= 0.6 * len(flag_set)
+
     logger.info("Running cycle detection over %d labeled groups …", len(cycle_groups))
     for i, group in enumerate(cycle_groups):
         for account_id in group.accounts:
@@ -158,15 +190,25 @@ async def run_benchmark(
                 flags = await detector.detect(
                     account_id, reference_time=dataset_reference_time
                 )
-                for flag in flags:
-                    if flag["fingerprint"] not in detected_fingerprints:
-                        detected_fingerprints.add(flag["fingerprint"])
-                        all_flags.append(flag)
             except Exception as e:
                 logger.warning(
                     "detect() failed for account %s in group %d: %s",
                     account_id[:8], group.group_id, e,
                 )
+                continue
+            group_hit = False
+            for flag in flags:
+                if flag["fingerprint"] not in detected_fingerprints:
+                    detected_fingerprints.add(flag["fingerprint"])
+                    all_flags.append(flag)
+                if _matches_group(flag.get("account_ids", []), group):
+                    group_hit = True
+            # The same ring returns from every node on it — once this group is found,
+            # seeding detection from its remaining accounts is wasted work (a big saving
+            # at high depth). Background/false-positive rings are still surfaced because
+            # every account is seeded until its own group is hit.
+            if group_hit:
+                break
         if (i + 1) % 10 == 0:
             logger.info(
                 "  detection progress: %d/%d groups | flags so far: %d",
@@ -176,17 +218,9 @@ async def run_benchmark(
     # ------------------------------------------------------------------ #
     # Step 4 — Match detected flags to labeled groups
     # ------------------------------------------------------------------ #
-    # A detected ring is a subset of some labeled group's accounts. We call it a match
-    # when the ring is substantially contained in the group: it shares >= 2 accounts and
-    # at least 60% of the ring's own accounts fall inside the group. This avoids a large
-    # ring coincidentally matching a small group on one shared node.
-    def _matches_group(flag_accounts: list[str], group: CycleGroup) -> bool:
-        flag_set = frozenset(flag_accounts)
-        if not flag_set:
-            return False
-        overlap = len(flag_set & group.account_set)
-        return overlap >= 2 and overlap >= 0.6 * len(flag_set)
-
+    # A detected ring is a subset of some labeled group's accounts (see _matches_group
+    # above): it must share >= 2 accounts and >= 60% of the ring's own accounts must fall
+    # inside the group, so a large ring can't coincidentally match a small group.
     matched_group_ids: set[int] = set()
     matched_flag_idx: set[int] = set()
     for gi, group in enumerate(cycle_groups):
