@@ -26,7 +26,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Optional
 
-from benchmarks.ibm_aml.patterns import CycleGroup, _account_key, _parse_ts
+from benchmarks.ibm_aml.patterns import CycleGroup, _account_key, _parse_ts, _row_from_parts
 
 logger = logging.getLogger(__name__)
 
@@ -182,8 +182,10 @@ async def ingest(
 
     logger.info("Pass 1: scanning CSV for cycle transactions …")
     with open(csv_path, newline="", encoding="utf-8") as f:
-        reader = csv.DictReader(f)
-        for i, row in enumerate(reader):
+        reader = csv.reader(f)
+        next(reader, None)  # skip header (has duplicate "Account" cols — read positionally)
+        for i, parts in enumerate(reader):
+            row = _row_from_parts(parts)
             transfer = _row_to_transfer(row)
             if transfer is None:
                 stats.skipped_bad_rows += 1

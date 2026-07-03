@@ -125,6 +125,19 @@ class Neo4jClient:
             transaction_id: Unique transaction ID — used as TRANSFER.txn_id (MERGE key)
             idempotency_key: Kept for interface compatibility; MERGE on txn_id is the guard
         """
+        # Two edges are maintained per payment:
+        #   1. TRANSFER — one per transaction (MERGE on txn_id), full per-txn detail.
+        #      Used for audit and any per-txn tracing.
+        #   2. FLOWS_TO — one aggregate edge per directed account pair (CLAUDE.md data
+        #      model: total_amount, tx_count, first_seen, last_seen, avg_tx_size).
+        #      Cycle detection runs on FLOWS_TO because it collapses the 20-50 parallel
+        #      TRANSFER edges between a pair into a single edge, so variable-length cycle
+        #      search does not explode combinatorially (branching = distinct neighbours,
+        #      not parallel-edge count).
+        #
+        # Idempotency: TRANSFER is safe on retry (MERGE on txn_id). FLOWS_TO aggregates
+        # are incremented on every call; the outbox's once-delivery guarantee prevents
+        # double-counting in production.
         query = """
         MERGE (src:Account {id: $sender_id})
           ON CREATE SET src.created_at = timestamp()
@@ -137,6 +150,22 @@ class Neo4jClient:
             t.rail         = $rail,
             t.event_type   = $event_type,
             t.created_at   = timestamp()
+        MERGE (src)-[f:FLOWS_TO]->(dst)
+          ON CREATE SET
+            f.tx_count     = 1,
+            f.total_amount = $amount_cents,
+            f.first_ts     = $timestamp_utc,
+            f.last_ts      = $timestamp_utc,
+            f.min_amount   = $amount_cents,
+            f.max_amount   = $amount_cents,
+            f.rail         = $rail
+          ON MATCH SET
+            f.tx_count     = f.tx_count + 1,
+            f.total_amount = f.total_amount + $amount_cents,
+            f.first_ts     = CASE WHEN $timestamp_utc < f.first_ts THEN $timestamp_utc ELSE f.first_ts END,
+            f.last_ts      = CASE WHEN $timestamp_utc > f.last_ts  THEN $timestamp_utc ELSE f.last_ts END,
+            f.min_amount   = CASE WHEN $amount_cents < f.min_amount THEN $amount_cents ELSE f.min_amount END,
+            f.max_amount   = CASE WHEN $amount_cents > f.max_amount THEN $amount_cents ELSE f.max_amount END
         """
 
         try:
@@ -174,6 +203,7 @@ class Neo4jClient:
         max_leak: float = CYCLE_MAX_LEAK,
         min_cycle_cents: int = CYCLE_MIN_VALUE_CENTS,
         max_results: int = CYCLE_MAX_RESULTS,
+        reference_time: Optional[datetime] = None,
     ) -> List[Dict[str, Any]]:
         """
         Find transaction-level circular flows starting from a given account.
@@ -204,27 +234,61 @@ class Neo4jClient:
         Returns:
             List of dicts: {node_ids, amounts, timestamps, txn_ids}
         """
-        max_depth = max(2, min(6, max_depth))  # clamp to safe range
+        max_depth = max(2, min(max_depth, max_depth))  # allow config-controlled depth
 
-        now_epoch = int(datetime.now(timezone.utc).timestamp())
+        ref = reference_time if reference_time is not None else datetime.now(timezone.utc)
+        now_epoch = int(ref.timestamp())
         window_start_epoch = now_epoch - int(window_hours * 3600)
         max_hop_gap_seconds = int(max_hop_gap_hours * 3600)
 
-        # Literal hop bound formatted into pattern (bounded int, not user data).
+        # Cycle search runs on the aggregated FLOWS_TO edge (one per directed pair),
+        # NOT the per-txn TRANSFER edge. This is essential for performance: real payment
+        # data has 20-50 parallel TRANSFER edges between the same pair, which makes a
+        # variable-length TRANSFER search O(parallel^depth) — billions of paths. FLOWS_TO
+        # collapses each pair to a single edge, so branching is the number of distinct
+        # neighbours (tiny in a laundering ring).
+        #
+        # Temporal feasibility on aggregate envelopes:
+        #   - last_ts[i+1] >= first_ts[i]  → a forward-ordered txn pair exists
+        #   - first_ts[i+1] - last_ts[i] <= max_gap → hops are close enough to be one flow
+        # Conservation is currency-aware: when consecutive hops use different currencies
+        # (rail differs), raw cent comparison is meaningless across FX, so we skip it.
+        # Otherwise the representative (max) amount must be non-growing within max_leak.
+        # Temporal model is rotation-invariant. A cycle seeded from an arbitrary account
+        # crosses one "wrap point" where time resets (the flow's start node), so requiring
+        # strictly increasing timestamps along the path is wrong — it fails for every
+        # rotation except one. Instead we require AT MOST ONE time-descent around the ring:
+        # a genuine one-directional money flow ascends on every hop except the single wrap,
+        # while a coincidental topological ring has many descents.
+        #
+        # `ft` is the per-hop representative time (first_ts). Index i+1 wraps to 0 so the
+        # descent count is computed over the full circular sequence.
+        #
+        # Conservation uses range-overlap on the aggregate min/max envelope (not max-to-max,
+        # which compares unrelated parallel txns): consecutive same-currency hops must have
+        # overlapping amount ranges within the leak tolerance, i.e. some pair of txns across
+        # the two hops could form a conserved step. Cross-currency hops skip it (FX).
         query = f"""
-        MATCH path = (start:Account {{id: $account_id}})-[rels:TRANSFER*2..{max_depth}]->(start)
-        WHERE ALL(r IN rels WHERE r.ts >= $window_start_epoch)
-          AND ALL(i IN range(0, size(rels)-2) WHERE
-                rels[i+1].ts >= rels[i].ts
-                AND rels[i+1].ts - rels[i].ts <= $max_hop_gap_seconds
-                AND rels[i+1].amount_cents <= rels[i].amount_cents
-                AND rels[i+1].amount_cents >= toInteger(rels[i].amount_cents * (1.0 - $max_leak)))
-          AND reduce(mn = rels[0].amount_cents, r IN rels |
-                CASE WHEN r.amount_cents < mn THEN r.amount_cents ELSE mn END) >= $min_cycle_cents
-        RETURN [n IN nodes(path) | n.id] AS node_ids,
-               [r IN rels | r.amount_cents] AS amounts,
-               [r IN rels | r.ts]           AS timestamps,
-               [r IN rels | r.txn_id]       AS txn_ids
+        MATCH path = (start:Account {{id: $account_id}})-[rels:FLOWS_TO*2..{max_depth}]->(start)
+        WITH path, rels, [r IN rels | r.first_ts] AS ft, size(rels) AS n
+        WHERE ALL(r IN rels WHERE r.last_ts >= $window_start_epoch)
+          AND size([i IN range(0, n-1) WHERE
+                (CASE WHEN i+1 = n THEN ft[0] ELSE ft[i+1] END) < ft[i]]) <= 1
+          AND ALL(i IN range(0, n-1) WHERE
+                (CASE WHEN i+1 = n THEN ft[0] ELSE ft[i+1] END) < ft[i]
+                OR (CASE WHEN i+1 = n THEN ft[0] ELSE ft[i+1] END) - ft[i] <= $max_hop_gap_seconds)
+          AND ALL(i IN range(0, n-2) WHERE
+                rels[i].rail <> rels[i+1].rail
+                OR (
+                  rels[i+1].min_amount <= rels[i].max_amount
+                  AND rels[i+1].max_amount >= toInteger(rels[i].min_amount * (1.0 - $max_leak))
+                ))
+          AND reduce(mn = rels[0].max_amount, r IN rels |
+                CASE WHEN r.max_amount < mn THEN r.max_amount ELSE mn END) >= $min_cycle_cents
+        RETURN [nd IN nodes(path) | nd.id] AS node_ids,
+               [r IN rels | r.max_amount]  AS amounts,
+               [r IN rels | r.last_ts]     AS timestamps,
+               [r IN rels | r.tx_count]    AS txn_ids
         LIMIT $max_results
         """
 

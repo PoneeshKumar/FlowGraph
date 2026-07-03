@@ -36,6 +36,22 @@ logger = logging.getLogger(__name__)
 # Timestamp formats seen in IBM AML dataset
 _TS_FORMATS = ["%Y/%m/%d %H:%M", "%Y-%m-%d %H:%M:%S", "%m/%d/%Y %H:%M"]
 
+# The HI-Small CSV has two columns both named "Account" (from and to).
+# csv.DictReader silently drops the second, so we must read positionally.
+_CSV_COLS = [
+    "Timestamp", "From Bank", "Account", "To Bank", "Account.1",
+    "Amount Received", "Receiving Currency", "Amount Paid",
+    "Payment Currency", "Payment Format", "Is Laundering",
+]
+
+
+def _row_from_parts(parts: list[str]) -> dict:
+    """Map a positional CSV row to a dict with unambiguous column names."""
+    row = {}
+    for i, key in enumerate(_CSV_COLS):
+        row[key] = parts[i].strip() if i < len(parts) else ""
+    return row
+
 
 def _parse_ts(raw: str) -> Optional[datetime]:
     for fmt in _TS_FORMATS:
@@ -86,7 +102,7 @@ def _build_group_from_rows(group_id: int, rows: list[dict]) -> Optional[CycleGro
             from_key = _account_key(row["From Bank"], row["Account"])
             to_key   = _account_key(row["To Bank"],   row["Account.1"])
             amount   = int(float(row["Amount Paid"]) * 100)
-            ts       = _parse_ts(row["Timestamp"])
+            ts       = _parse_ts(row.get("Timestamp", ""))
             currency = row.get("Payment Currency", "UNKNOWN").strip()
         except (KeyError, ValueError) as e:
             logger.debug("Skipping malformed row in group %d: %s", group_id, e)
@@ -129,77 +145,61 @@ def _parse_patterns_file(patterns_path: Path) -> list[CycleGroup]:
     """
     Parse HI-Small_Patterns.txt.
 
-    The file consists of blocks separated by blank lines. Each block has a
-    header line identifying the pattern type (e.g. "1 CYCLE" or "Pattern 5 FAN_OUT")
-    followed by transaction rows in CSV-like format matching the columns of the main
-    transaction file.
+    Actual format (confirmed from file inspection):
+      BEGIN LAUNDERING ATTEMPT - CYCLE:  Max N hops
+      <data rows — positional CSV, same column layout as HI-Small_Trans.csv>
+      END LAUNDERING ATTEMPT - CYCLE
 
-    We collect only CYCLE blocks. All other typologies are counted and logged.
+    Other typologies (FAN-IN, FAN-OUT, BIPARTITE, etc.) are skipped and counted.
     """
-    text = patterns_path.read_text(encoding="utf-8", errors="replace")
-    lines = text.splitlines()
-
     groups: list[CycleGroup] = []
     typology_counts: dict[str, int] = {}
 
     group_id = 0
-    current_typology: Optional[str] = None
+    in_cycle = False
     current_rows: list[dict] = []
-    header: Optional[list[str]] = None
 
-    # Detect the header row (contains "Timestamp" or "From Bank")
-    _HEADER_RE = re.compile(r"timestamp|from.?bank", re.IGNORECASE)
-    # Detect a pattern-type line (contains a typology keyword)
-    _TYPE_RE = re.compile(
-        r"\b(CYCLE|FAN[_\s]OUT|FAN[_\s]IN|SCATTER[_\s]GATHER|GATHER[_\s]SCATTER|"
-        r"BIPARTITE|STACK|RANDOM|U[_\s]SHAPE)\b",
-        re.IGNORECASE,
-    )
+    _BEGIN_RE = re.compile(r"^BEGIN LAUNDERING ATTEMPT - ([A-Z\-]+)", re.IGNORECASE)
+    _END_RE   = re.compile(r"^END LAUNDERING ATTEMPT",                 re.IGNORECASE)
 
     def _flush():
-        nonlocal current_typology, current_rows, group_id
-        if current_typology and current_typology.upper() == "CYCLE" and current_rows:
+        nonlocal group_id, current_rows, in_cycle
+        if in_cycle and current_rows:
             g = _build_group_from_rows(group_id, current_rows)
             if g:
                 groups.append(g)
                 group_id += 1
         current_rows = []
-        current_typology = None
+        in_cycle = False
 
-    for line in lines:
-        stripped = line.strip()
+    with open(patterns_path, encoding="utf-8", errors="replace") as fh:
+        for line in fh:
+            stripped = line.strip()
+            if not stripped:
+                continue
 
-        if not stripped:
-            # blank line between blocks
-            _flush()
-            continue
+            begin_m = _BEGIN_RE.match(stripped)
+            if begin_m:
+                _flush()
+                typology = begin_m.group(1).upper().rstrip(":")
+                typology_counts[typology] = typology_counts.get(typology, 0) + 1
+                in_cycle = (typology == "CYCLE")
+                continue
 
-        # Check if this is a typology-header line
-        m = _TYPE_RE.search(stripped)
-        if m and not _is_data_row(stripped):
-            _flush()
-            current_typology = m.group(1).upper().replace(" ", "_").replace("-", "_")
-            typology_counts[current_typology] = typology_counts.get(current_typology, 0) + 1
-            continue
+            if _END_RE.match(stripped):
+                _flush()
+                continue
 
-        # Check if this is the column-header row
-        if _HEADER_RE.search(stripped):
-            header = [c.strip() for c in stripped.split(",")]
-            continue
+            # Data row — parse positionally (no header row in pattern blocks)
+            if in_cycle:
+                parts = [p.strip() for p in stripped.split(",")]
+                if len(parts) >= 9:  # need at least through Payment Currency
+                    current_rows.append(_row_from_parts(parts))
 
-        # Data row — try to parse as CSV
-        if current_typology and header:
-            parts = [p.strip() for p in stripped.split(",")]
-            if len(parts) >= len(header):
-                current_rows.append(dict(zip(header, parts)))
-            elif len(parts) > 3:
-                # Partial match — still try (dataset sometimes has trailing commas)
-                current_rows.append(dict(zip(header, parts + [""] * (len(header) - len(parts)))))
-
-    _flush()  # flush last block
+    _flush()
 
     logger.info(
-        "Patterns file parsed: %d CYCLE groups found | all typologies: %s",
+        "Patterns file parsed: %d CYCLE groups | all typologies: %s",
         len(groups),
         typology_counts,
     )
@@ -233,9 +233,11 @@ def _derive_cycle_groups_from_csv(csv_path: Path) -> list[CycleGroup]:
     edges: list[tuple[str, str, dict]] = []
 
     with open(csv_path, newline="", encoding="utf-8") as f:
-        reader = csv.DictReader(f)
-        for row in reader:
-            if row.get("Is Laundering", "0").strip() != "1":
+        reader = csv.reader(f)
+        next(reader, None)  # skip header row
+        for parts in reader:
+            row = _row_from_parts(parts)
+            if row.get("Is Laundering", "0") != "1":
                 continue
             from_key = _account_key(row["From Bank"], row["Account"])
             to_key   = _account_key(row["To Bank"],   row["Account.1"])

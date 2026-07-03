@@ -28,7 +28,7 @@ POSTGRES_POOL_TIMEOUT = int(os.getenv("POSTGRES_POOL_TIMEOUT", "30"))
 # Neo4j (property graph: accounts, merchants, edges, centrality)
 NEO4J_URI = os.getenv("NEO4J_URI", "neo4j://localhost:7687")
 NEO4J_USER = os.getenv("NEO4J_USER", "neo4j")
-NEO4J_PASSWORD = os.getenv("NEO4J_PASSWORD", "password")
+NEO4J_PASSWORD = os.getenv("NEO4J_PASSWORD", "changeme")
 NEO4J_DATABASE = os.getenv("NEO4J_DATABASE", "neo4j")
 
 # Redis (time-windowed edge weights, caching)
@@ -64,19 +64,21 @@ LOG_LEVEL = os.getenv("LOG_LEVEL", "INFO")
 # All values are tunable via env vars; defaults reflect CLAUDE.md spec.
 
 CYCLE_MAX_DEPTH = int(os.getenv("CYCLE_MAX_DEPTH", "6"))
-# Max hops in a cycle (clamped to [2, 6] in neo4j.find_cycles)
+# Max hops in a cycle (6 = safe Neo4j traversal limit; increase cautiously)
 
 CYCLE_WINDOW_HOURS = int(os.getenv("CYCLE_WINDOW_HOURS", "48"))
 # Look-back window: only consider TRANSFER edges within this many hours
 
-CYCLE_MAX_HOP_GAP_HOURS = float(os.getenv("CYCLE_MAX_HOP_GAP_HOURS", "24.0"))
-# Max hours allowed between consecutive hops (same flow, not coincidence)
+CYCLE_MAX_HOP_GAP_HOURS = float(os.getenv("CYCLE_MAX_HOP_GAP_HOURS", "72.0"))
+# Max hours allowed between consecutive hops (72h = 3 days; real layering
+# schemes often spread hops over days to avoid detection)
 
 CYCLE_MAX_LEAK = float(os.getenv("CYCLE_MAX_LEAK", "0.20"))
 # Max fractional value bleed-off per hop (0.20 = up to 20% fees/cuts allowed)
 
-CYCLE_MIN_VALUE_CENTS = int(os.getenv("CYCLE_MIN_VALUE_CENTS", "100000"))
-# Minimum weakest-hop amount to flag ($1,000 — ignore trivial/noise cycles)
+CYCLE_MIN_VALUE_CENTS = int(os.getenv("CYCLE_MIN_VALUE_CENTS", "10000"))
+# Minimum weakest-hop amount to flag ($100 — filters trivial test noise while
+# catching structuring below $1k thresholds)
 
 CYCLE_MAX_RESULTS = int(os.getenv("CYCLE_MAX_RESULTS", "20"))
 # Cap on cycles returned per account per detection run

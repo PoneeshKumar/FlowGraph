@@ -46,6 +46,7 @@ if str(_BACKEND) not in sys.path:
 from benchmarks.ibm_aml.ingestor import ingest, IngestStats
 from benchmarks.ibm_aml.patterns import load_cycle_groups, CycleGroup
 from benchmarks.ibm_aml.blindspots import analyze_misses, BlindspotReport
+from config import CYCLE_WINDOW_HOURS
 from db.neo4j import Neo4jClient
 from db.postgres import PostgresClient
 from fraud.cycle_detector import CycleDetector
@@ -72,6 +73,7 @@ async def run_benchmark(
     neo4j_client: Neo4jClient,
     postgres_client: PostgresClient | None,
     background_ratio: float = 5.0,
+    skip_ingest: bool = False,
 ) -> BenchmarkResult:
     """
     Full benchmark pipeline.
@@ -95,33 +97,71 @@ async def run_benchmark(
 
     logger.info("Loaded %d labeled CYCLE groups", len(cycle_groups))
 
+    # Anchor the detection window to the dataset's own time period, not now.
+    # The IBM AML data is from September 2022; using datetime.now() would place
+    # every edge outside any lookback window. We scan the full CSV for the max
+    # timestamp so the window covers the entire dataset, not just the cycle groups.
+    import csv as _csv
+    from benchmarks.ibm_aml.patterns import _parse_ts, _row_from_parts
+    from datetime import timedelta
+
+    logger.info("Scanning CSV for max timestamp to anchor detection window …")
+    dataset_reference_time: datetime | None = None
+    with open(csv_path, newline="", encoding="utf-8") as _fh:
+        _reader = _csv.reader(_fh)
+        next(_reader, None)
+        for _parts in _reader:
+            _ts = _parse_ts(_parts[0]) if _parts else None
+            if _ts and (dataset_reference_time is None or _ts > dataset_reference_time):
+                dataset_reference_time = _ts
+
+    if dataset_reference_time:
+        dataset_reference_time = dataset_reference_time + timedelta(hours=1)
+        logger.info(
+            "Dataset reference time: %s  (window looks back %dh from here)",
+            dataset_reference_time.isoformat(),
+            CYCLE_WINDOW_HOURS,
+        )
+
     # ------------------------------------------------------------------ #
-    # Step 2 — Ingest into Neo4j
+    # Step 2 — Ingest into Neo4j (skippable when graph is already populated)
     # ------------------------------------------------------------------ #
-    logger.info("Ingesting transactions into Neo4j …")
     await neo4j_client.init_constraints()
 
-    stats = await ingest(
-        csv_path=csv_path,
-        cycle_groups=cycle_groups,
-        neo4j_client=neo4j_client,
-        postgres_client=postgres_client,
-        background_ratio=background_ratio,
-    )
+    if skip_ingest:
+        logger.info("Skipping ingest (--skip-ingest flag set — graph assumed populated)")
+        stats = IngestStats()
+    else:
+        logger.info("Ingesting transactions into Neo4j …")
+        stats = await ingest(
+            csv_path=csv_path,
+            cycle_groups=cycle_groups,
+            neo4j_client=neo4j_client,
+            postgres_client=postgres_client,
+            background_ratio=background_ratio,
+        )
 
     # ------------------------------------------------------------------ #
     # Step 3 — Run CycleDetector for each labeled group's accounts
     # ------------------------------------------------------------------ #
     detector = CycleDetector(neo4j_client, postgres_client)
     detected_fingerprints: set[str] = set()
+    # Collect every detected flag (with its ring account_ids) in memory. This is the
+    # source of truth for matching — it works in --neo4j-only mode too, where nothing
+    # is persisted to Postgres.
+    all_flags: list[dict] = []
 
     logger.info("Running cycle detection over %d labeled groups …", len(cycle_groups))
     for i, group in enumerate(cycle_groups):
         for account_id in group.accounts:
             try:
-                flags = await detector.detect(account_id)
+                flags = await detector.detect(
+                    account_id, reference_time=dataset_reference_time
+                )
                 for flag in flags:
-                    detected_fingerprints.add(flag["fingerprint"])
+                    if flag["fingerprint"] not in detected_fingerprints:
+                        detected_fingerprints.add(flag["fingerprint"])
+                        all_flags.append(flag)
             except Exception as e:
                 logger.warning(
                     "detect() failed for account %s in group %d: %s",
@@ -133,44 +173,30 @@ async def run_benchmark(
                 i + 1, len(cycle_groups), len(detected_fingerprints),
             )
 
-    # Also run detection over background accounts to surface false positives.
-    # We detect ALL flagged fingerprints from the detector's risk_flags store.
-    # We consider a detection a false positive if its account_ids have no overlap
-    # with any labeled CYCLE group's accounts.
-    labeled_account_sets = [g.account_set for g in cycle_groups]
-
-    def _is_false_positive(flag_account_ids: list[str]) -> bool:
-        flag_set = frozenset(flag_account_ids)
-        for labeled_set in labeled_account_sets:
-            if len(flag_set & labeled_set) >= max(1, len(labeled_set) - 1):
-                return False  # overlaps a labeled group — true positive
-        return True
-
     # ------------------------------------------------------------------ #
-    # Step 4 — Match detected fingerprints to labeled groups
+    # Step 4 — Match detected flags to labeled groups
     # ------------------------------------------------------------------ #
-    # Query the persisted risk_flags to get account_ids for each fingerprint
-    all_flags: list[dict] = []
-    if postgres_client:
-        try:
-            all_flags = await postgres_client.get_risk_flags(flag_type="CYCLE", limit=10_000)
-        except Exception as e:
-            logger.warning("Could not query risk_flags: %s", e)
+    # A detected ring is a subset of some labeled group's accounts. We call it a match
+    # when the ring is substantially contained in the group: it shares >= 2 accounts and
+    # at least 60% of the ring's own accounts fall inside the group. This avoids a large
+    # ring coincidentally matching a small group on one shared node.
+    def _matches_group(flag_accounts: list[str], group: CycleGroup) -> bool:
+        flag_set = frozenset(flag_accounts)
+        if not flag_set:
+            return False
+        overlap = len(flag_set & group.account_set)
+        return overlap >= 2 and overlap >= 0.6 * len(flag_set)
 
-    fp_count = sum(
-        1 for f in all_flags
-        if _is_false_positive(f.get("account_ids", []))
-    )
-
-    # A labeled CYCLE group is a TP if any of its accounts produced a detected flag
-    # whose account_ids overlap with the group's accounts.
     matched_group_ids: set[int] = set()
-    for f in all_flags:
-        flag_set = frozenset(f.get("account_ids", []))
-        for group in cycle_groups:
-            if group.group_id not in matched_group_ids:
-                if len(flag_set & group.account_set) >= max(1, len(group.account_set) - 1):
-                    matched_group_ids.add(group.group_id)
+    matched_flag_idx: set[int] = set()
+    for gi, group in enumerate(cycle_groups):
+        for fi, f in enumerate(all_flags):
+            if _matches_group(f.get("account_ids", []), group):
+                matched_group_ids.add(group.group_id)
+                matched_flag_idx.add(fi)
+
+    # A flag that matches no labeled group is a false positive.
+    fp_count = sum(1 for fi in range(len(all_flags)) if fi not in matched_flag_idx)
 
     tp = len(matched_group_ids)
     missed_groups = [g for g in cycle_groups if g.group_id not in matched_group_ids]
@@ -179,7 +205,11 @@ async def run_benchmark(
     # ------------------------------------------------------------------ #
     # Step 5 — Blindspot analysis
     # ------------------------------------------------------------------ #
-    now_epoch = int(datetime.now(timezone.utc).timestamp())
+    now_epoch = int(
+        dataset_reference_time.timestamp()
+        if dataset_reference_time
+        else datetime.now(timezone.utc).timestamp()
+    )
     blindspot_report = analyze_misses(
         missed_groups=missed_groups,
         true_positives=tp,
@@ -234,6 +264,11 @@ def _parse_args() -> argparse.Namespace:
         help="Skip Postgres writes (faster — Neo4j only)",
     )
     p.add_argument(
+        "--skip-ingest",
+        action="store_true",
+        help="Skip CSV ingest — assume graph is already populated (for parallel detection runs)",
+    )
+    p.add_argument(
         "--report",
         default="",
         help="Path to write JSON report (default: benchmarks/results/ibm_aml_<timestamp>.json)",
@@ -276,6 +311,7 @@ async def _main() -> None:
             neo4j_client=neo4j_client,
             postgres_client=postgres_client,
             background_ratio=args.background_ratio,
+            skip_ingest=args.skip_ingest,
         )
     finally:
         await neo4j_client.close()

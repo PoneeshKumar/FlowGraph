@@ -243,7 +243,11 @@ class CycleDetector:
         self.neo4j = neo4j_client
         self.postgres = postgres_client
 
-    async def detect(self, account_id: str) -> List[Dict[str, Any]]:
+    async def detect(
+        self,
+        account_id: str,
+        reference_time: "datetime | None" = None,
+    ) -> List[Dict[str, Any]]:
         """
         Run cycle detection for one account and persist any flags found.
 
@@ -261,7 +265,9 @@ class CycleDetector:
         Returns:
             List of persisted flag dicts (may be empty if no cycles found)
         """
-        raw_cycles = await self.neo4j.find_cycles(account_id)
+        raw_cycles = await self.neo4j.find_cycles(
+            account_id, reference_time=reference_time
+        )
 
         if not raw_cycles:
             return []
@@ -301,15 +307,16 @@ class CycleDetector:
             unique_accounts = node_ids[:-1] if node_ids[0] == node_ids[-1] else node_ids
 
             # Persist (idempotent — bumps detection_count on conflict)
-            await self.postgres.upsert_risk_flag(
-                flag_type="CYCLE",
-                fingerprint=fp,
-                account_ids=unique_accounts,
-                risk_level=scored["risk_level"],
-                risk_score=scored["risk_score"],
-                explanation=scored["explanation"],
-                details=scored["details"],
-            )
+            if self.postgres is not None:
+                await self.postgres.upsert_risk_flag(
+                    flag_type="CYCLE",
+                    fingerprint=fp,
+                    account_ids=unique_accounts,
+                    risk_level=scored["risk_level"],
+                    risk_score=scored["risk_score"],
+                    explanation=scored["explanation"],
+                    details=scored["details"],
+                )
 
             flag = {
                 "fingerprint": fp,
