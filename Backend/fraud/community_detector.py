@@ -154,3 +154,148 @@ def community_fingerprint(core: Iterable[str]) -> str:
     if not ids:
         raise ValueError("community_fingerprint: empty core")
     return hashlib.sha256("|".join(ids).encode()).hexdigest()
+
+
+# ---------------------------------------------------------------------------
+# Scoring (pure — no I/O, fully unit-testable)
+# ---------------------------------------------------------------------------
+
+def score_community(
+    member_ids: List[str],
+    internal_edge_count: int,
+    internal_total_cents: int,
+    flagged_member_count: int,
+    conductance: float = 0.0,
+    window_days: int = LOUVAIN_WINDOW_DAYS,
+    density_ref: float = LOUVAIN_DENSITY_REF,
+    volume_floor_cents: int = LOUVAIN_VOLUME_FLOOR_CENTS,
+    volume_cap_cents: int = LOUVAIN_VOLUME_CAP_CENTS,
+    overlap_ref: float = LOUVAIN_OVERLAP_REF,
+    level_medium: float = LOUVAIN_LEVEL_MEDIUM,
+    level_high: float = LOUVAIN_LEVEL_HIGH,
+    level_critical: float = LOUVAIN_LEVEL_CRITICAL,
+) -> Dict[str, Any]:
+    """
+    Score a detected community and produce a natural-language explanation.
+
+    Five dimensions, mirroring the cycle scorer's shape:
+      1. size band     — laundering rings run ~5–50 accounts; tiny communities are
+                         below Louvain's resolution, huge ones are merchant hubs
+      2. density       — internal edges / possible edges; meshes are dense,
+                         benign hub-and-spoke stars are not
+      3. volume        — log-scaled internal money movement in the window
+      4. isolation     — 1 − conductance: an isolated cluster (money stays inside)
+                         is more suspicious than a dense corner of an otherwise
+                         well-connected legitimate hub. conductance is computed by
+                         the caller (community_conductance / nx.conductance); 0.0
+                         means no flow leaves the community → cohesion 1.0
+      5. risk overlap  — fraction of members already flagged by OTHER detectors
+                         (cross-detector signal; strongest single indicator)
+
+    Args:
+        member_ids:           community members (≥ 2)
+        internal_edge_count:  undirected edges inside the community subgraph
+        internal_total_cents: sum of total_amount over those edges
+        conductance:          fraction of edge weight crossing the community
+                              boundary, in [0, 1]; 0.0 = fully isolated
+        flagged_member_count: members appearing in open risk_flags from other detectors
+
+    Returns:
+        {
+          risk_score:  float in [0.0, 1.0]
+          risk_level:  'low' | 'medium' | 'high' | 'critical'
+          explanation: str  (always non-empty — regulatory requirement)
+          details: dict     (raw numbers + per-dimension scores for audit trail)
+        }
+    """
+    n = len(member_ids)
+    if n < 2:
+        raise ValueError("score_community needs at least 2 members")
+
+    # --- 1. Size-band score ---
+    if n <= 3:
+        size_score = 0.2
+    elif n <= 7:
+        size_score = 0.7
+    elif n <= 50:
+        size_score = 1.0
+    elif n <= 150:
+        size_score = 0.5
+    else:
+        size_score = 0.1
+
+    # --- 2. Density score ---
+    possible_edges = n * (n - 1) / 2
+    density = internal_edge_count / possible_edges if possible_edges else 0.0
+    density_score = min(1.0, density / density_ref) if density_ref > 0 else 0.0
+
+    # --- 3. Volume score (log scale, floor → 0.0, cap → 1.0) ---
+    _floor = max(volume_floor_cents, 1)
+    volume_score = min(
+        1.0,
+        math.log(max(internal_total_cents, _floor) / _floor + 1)
+        / math.log(volume_cap_cents / _floor + 1),
+    )
+
+    # --- 4. Isolation / cohesion score ---
+    # conductance is the fraction of edge weight crossing the boundary; a fully
+    # isolated community (conductance 0) scores 1.0, a maximally leaky one 0.0.
+    cohesion_score = max(0.0, 1.0 - min(1.0, conductance))
+
+    # --- 5. Known-risk overlap score ---
+    flagged_fraction = flagged_member_count / n
+    overlap_score = min(1.0, flagged_fraction / overlap_ref) if overlap_ref > 0 else 0.0
+
+    # --- Weighted composite ---
+    # Overlap carries the most weight: corroboration from an independent
+    # detector is stronger evidence than any topology feature alone.
+    risk_score = (
+        0.10 * size_score
+        + 0.15 * density_score
+        + 0.25 * volume_score
+        + 0.15 * cohesion_score
+        + 0.35 * overlap_score
+    )
+    risk_score = min(1.0, max(0.0, risk_score))
+
+    if risk_score >= level_critical:
+        risk_level = "critical"
+    elif risk_score >= level_high:
+        risk_level = "high"
+    elif risk_score >= level_medium:
+        risk_level = "medium"
+    else:
+        risk_level = "low"
+
+    total_dollars = internal_total_cents / 100
+    explanation = (
+        f"Community of {n} accounts with {internal_edge_count} internal transfer "
+        f"corridors (density {density:.0%}, boundary conductance {conductance:.2f}) "
+        f"moved ${total_dollars:,.2f} internally within the last {window_days} days. "
+        f"{flagged_member_count} member(s) already carry open risk flags from other "
+        f"detectors. Risk score {risk_score:.2f} ({risk_level}). "
+        f"Pattern consistent with a coordinated laundering network "
+        f"(layering / smurfing cluster)."
+    )
+
+    details = {
+        "n_members":            n,
+        "internal_edge_count":  internal_edge_count,
+        "internal_total_cents": internal_total_cents,
+        "density":              round(density, 4),
+        "conductance":          round(conductance, 4),
+        "flagged_member_count": flagged_member_count,
+        "size_score":           round(size_score, 4),
+        "density_score":        round(density_score, 4),
+        "volume_score":         round(volume_score, 4),
+        "cohesion_score":       round(cohesion_score, 4),
+        "overlap_score":        round(overlap_score, 4),
+        "window_days":          window_days,
+    }
+
+    return {
+        "risk_score":  round(risk_score, 4),
+        "risk_level":  risk_level,
+        "explanation": explanation,
+        "details":     details,
+    }

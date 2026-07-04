@@ -16,6 +16,7 @@ from fraud.community_detector import (
     community_fingerprint,
     core_members,
     edge_weight,
+    score_community,
 )
 
 pytestmark = pytest.mark.unit
@@ -139,3 +140,99 @@ class TestCommunityFingerprint:
     def test_empty_core_raises(self):
         with pytest.raises(ValueError):
             community_fingerprint([])
+
+
+# ---------------------------------------------------------------------------
+# score_community
+# ---------------------------------------------------------------------------
+
+class TestScoreCommunity:
+    def test_dense_ring_sized_high_volume_flagged_community_is_critical(self):
+        # 8 members, complete graph (28 edges, density 1.0), $1.4M internal,
+        # 2 members already flagged by other detectors (25% → overlap saturates).
+        members = [f"S{i}" for i in range(8)]
+        result = score_community(
+            member_ids=members,
+            internal_edge_count=28,
+            internal_total_cents=140_000_000,
+            flagged_member_count=2,
+        )
+        assert result["risk_level"] == "critical"
+        assert result["risk_score"] >= 0.85
+
+    def test_small_low_volume_community_is_low(self):
+        # 3-node chain, $400 total, nobody flagged.
+        result = score_community(
+            member_ids=["B0", "B1", "B2"],
+            internal_edge_count=2,
+            internal_total_cents=40_000,
+            flagged_member_count=0,
+        )
+        assert result["risk_level"] == "low"
+        assert result["risk_score"] < 0.40
+
+    def test_overlap_raises_score_monotonically(self):
+        members = [f"M{i}" for i in range(10)]
+        base = dict(member_ids=members, internal_edge_count=12,
+                    internal_total_cents=50_000_000)
+        s0 = score_community(flagged_member_count=0, **base)["risk_score"]
+        s2 = score_community(flagged_member_count=2, **base)["risk_score"]
+        s5 = score_community(flagged_member_count=5, **base)["risk_score"]
+        assert s0 < s2 <= s5
+
+    def test_huge_community_scores_low_on_size(self):
+        members = [f"H{i}" for i in range(500)]
+        result = score_community(
+            member_ids=members,
+            internal_edge_count=600,
+            internal_total_cents=500_000_000,
+            flagged_member_count=0,
+        )
+        assert result["details"]["size_score"] == pytest.approx(0.1)
+
+    def test_explanation_always_nonempty_and_mentions_key_facts(self):
+        result = score_community(
+            member_ids=["A", "B", "C", "D", "E"],
+            internal_edge_count=6,
+            internal_total_cents=25_000_000,
+            flagged_member_count=1,
+        )
+        text = result["explanation"]
+        assert text
+        assert "5 accounts" in text
+        assert result["risk_level"] in text
+
+    def test_details_carry_all_five_dimension_scores(self):
+        result = score_community(
+            member_ids=["A", "B", "C", "D"],
+            internal_edge_count=4,
+            internal_total_cents=10_000_000,
+            flagged_member_count=0,
+            conductance=0.3,
+        )
+        for key in ("size_score", "density_score", "volume_score",
+                    "overlap_score", "cohesion_score"):
+            assert 0.0 <= result["details"][key] <= 1.0
+        assert result["details"]["conductance"] == pytest.approx(0.3)
+
+    def test_higher_conductance_lowers_score(self):
+        # A leaky community (much flow crosses the boundary) is less suspicious
+        # than an otherwise-identical isolated one.
+        base = dict(
+            member_ids=[f"M{i}" for i in range(6)],
+            internal_edge_count=10,
+            internal_total_cents=50_000_000,
+            flagged_member_count=1,
+        )
+        isolated = score_community(conductance=0.0, **base)["risk_score"]
+        leaky = score_community(conductance=1.0, **base)["risk_score"]
+        assert leaky < isolated
+
+    def test_fewer_than_two_members_raises(self):
+        with pytest.raises(ValueError):
+            score_community(
+                member_ids=["A"],
+                internal_edge_count=0,
+                internal_total_cents=0,
+                flagged_member_count=0,
+            )
