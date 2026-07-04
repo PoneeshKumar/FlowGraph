@@ -545,3 +545,96 @@ class CommunityDetector:
             kept, len(communities), written, len(flags),
         )
         return {"communities": kept, "assignments": written, "flags": flags}
+
+
+# ---------------------------------------------------------------------------
+# Manual entrypoint: seeds a gather-scatter cluster and runs detection
+# ---------------------------------------------------------------------------
+
+async def _run_demo() -> None:
+    """
+    Inject a known gather-scatter community into Neo4j and run the batch.
+    Four sources funnel ~$40k each into a collector, which scatters to three
+    mules — 8 accounts, 7 corridors, the classic smurfing shape that cycle
+    detection cannot see. Requires docker compose up (Postgres + Neo4j).
+
+    Usage:
+        python -m fraud.community_detector
+    """
+    import pathlib
+    import sys
+    from datetime import timedelta
+
+    sys.path.insert(0, str(pathlib.Path(__file__).parent.parent))
+
+    from db.neo4j import Neo4jClient
+    from db.postgres import PostgresClient
+
+    logging.basicConfig(level=logging.INFO)
+
+    neo4j_client = Neo4jClient()
+    postgres_client = PostgresClient()
+
+    await neo4j_client.initialize()
+    await postgres_client.initialize()
+    await neo4j_client.init_constraints()
+
+    # Ensure the risk_flags table exists
+    migration_sql = (
+        pathlib.Path(__file__).parent.parent
+        / "migrations"
+        / "002_create_risk_flags_table.sql"
+    ).read_text()
+    async with postgres_client._get_connection() as conn:
+        await conn.execute(migration_sql)
+
+    now = datetime.now(timezone.utc)
+    hops = [
+        # Gather: four sources → collector
+        ("DEMO_LV_SRC1", "DEMO_LV_HUB", 4_100_000, 0),
+        ("DEMO_LV_SRC2", "DEMO_LV_HUB", 3_900_000, 1800),
+        ("DEMO_LV_SRC3", "DEMO_LV_HUB", 4_050_000, 3600),
+        ("DEMO_LV_SRC4", "DEMO_LV_HUB", 3_950_000, 5400),
+        # Scatter: collector → three mules
+        ("DEMO_LV_HUB", "DEMO_LV_MULE1", 5_200_000, 86_400),
+        ("DEMO_LV_HUB", "DEMO_LV_MULE2", 5_300_000, 90_000),
+        ("DEMO_LV_HUB", "DEMO_LV_MULE3", 5_100_000, 93_600),
+    ]
+
+    print("Seeding gather-scatter demo cluster …")
+    for i, (src, dst, amount, offset_s) in enumerate(hops):
+        ts = now - timedelta(days=2) + timedelta(seconds=offset_s)
+        await neo4j_client.upsert_transaction_graph(
+            sender_id=src,
+            receiver_id=dst,
+            amount_cents=amount,
+            timestamp_utc=ts,
+            rail="WIRE",
+            event_type="SETTLEMENT",
+            transaction_id=f"txn-demo-lv-{i}",
+            idempotency_key=f"txn-demo-lv-{i}",
+        )
+        print(f"  {src} → {dst} | ${amount/100:,.2f}")
+
+    print("\nRunning Louvain batch …")
+    detector = CommunityDetector(neo4j_client, postgres_client)
+    result = await detector.run()
+
+    print(f"\nCommunities kept: {result['communities']}")
+    print(f"Node assignments written: {result['assignments']}")
+    for flag in result["flags"]:
+        print(f"\n  COMMUNITY flag {flag['community_id']}")
+        print(f"  level={flag['risk_level']} score={flag['risk_score']}")
+        print(f"  members: {flag['account_ids']}")
+        print(f"  {flag['explanation']}")
+    if not result["flags"]:
+        print("\n  (no community cleared the medium threshold)")
+
+    await neo4j_client.close()
+    await postgres_client.close()
+
+
+if __name__ == "__main__":
+    import asyncio as _asyncio
+
+    _asyncio.run(_run_demo())
