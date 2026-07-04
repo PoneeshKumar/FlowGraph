@@ -113,3 +113,66 @@ CYCLE_FAST_CLOSE_HOURS = float(os.getenv("CYCLE_FAST_CLOSE_HOURS", "24.0"))
 CYCLE_LEVEL_MEDIUM = float(os.getenv("CYCLE_LEVEL_MEDIUM", "0.40"))
 CYCLE_LEVEL_HIGH = float(os.getenv("CYCLE_LEVEL_HIGH", "0.65"))
 CYCLE_LEVEL_CRITICAL = float(os.getenv("CYCLE_LEVEL_CRITICAL", "0.85"))
+
+
+# ==================== LOUVAIN COMMUNITY DETECTION ====================
+# Daily batch community detection over aggregate FLOWS_TO edges. Runs
+# Python-side (networkx louvain_communities by default; optional leidenalg
+# engine via LOUVAIN_ENGINE, wired in a later task) — no GDS plugin dependency.
+# Communities are scored on five dimensions (size band, density, internal
+# volume, isolation/conductance, known-risk overlap); those clearing
+# LOUVAIN_LEVEL_MEDIUM persist to risk_flags as flag_type='COMMUNITY'.
+
+LOUVAIN_WINDOW_DAYS = int(os.getenv("LOUVAIN_WINDOW_DAYS", "30"))
+# Only FLOWS_TO edges with last_ts inside this window join the graph.
+# Communities should reflect *current* money movement. Treated as a tuning
+# variable — the IBM AML benchmark measures the runtime/accuracy tradeoff.
+
+LOUVAIN_SEED = int(os.getenv("LOUVAIN_SEED", "42"))
+# Louvain is randomized; a fixed seed makes runs reproducible and tests deterministic.
+
+LOUVAIN_RESOLUTION = float(os.getenv("LOUVAIN_RESOLUTION", "1.0"))
+# Modularity resolution. >1.0 → more, smaller communities; <1.0 → fewer, larger.
+
+LOUVAIN_WEIGHT_MODE = os.getenv("LOUVAIN_WEIGHT_MODE", "log_amount").lower()
+# Edge weight for modularity optimization:
+#   "log_amount" — log1p(total_amount): value-aware but whale-dampened, so one
+#                  large legitimate payment cannot glue unrelated accounts. Default.
+#   "amount"     — raw total_amount cents (pure value; whale-sensitive)
+#   "tx_count"   — relationship intensity (repeated transfers), value-blind
+#   "unweighted" — every edge weighs 1.0 (pure topology)
+
+LOUVAIN_MIN_COMMUNITY_SIZE = int(os.getenv("LOUVAIN_MIN_COMMUNITY_SIZE", "3"))
+# Communities smaller than this are noise: skipped entirely (no node props, no scoring).
+
+LOUVAIN_CORE_K = int(os.getenv("LOUVAIN_CORE_K", "10"))
+# Fingerprint = sha256 of the K highest weighted-degree members. The core of a
+# ring is stable across daily runs even as the periphery churns, so re-detection
+# upserts the same risk_flags row instead of spawning a duplicate alert.
+# Documented blindspot: a community whose CORE splits or merges gets a new flag.
+
+LOUVAIN_EXPORT_TIMEOUT_SECONDS = float(os.getenv("LOUVAIN_EXPORT_TIMEOUT_SECONDS", "120.0"))
+# Transaction timeout for the FLOWS_TO edge-list export query. A batch job may
+# take longer than the per-account cycle budget, but must still be bounded.
+
+LOUVAIN_ASSIGN_BATCH_SIZE = int(os.getenv("LOUVAIN_ASSIGN_BATCH_SIZE", "5000"))
+# Rows per UNWIND transaction when writing community_id node properties.
+
+# --- Community scoring knobs ---
+LOUVAIN_DENSITY_REF = float(os.getenv("LOUVAIN_DENSITY_REF", "0.15"))
+# Internal edge density (2m / n(n-1)) at which density_score saturates to 1.0.
+
+LOUVAIN_VOLUME_FLOOR_CENTS = int(os.getenv("LOUVAIN_VOLUME_FLOOR_CENTS", "1000000"))
+# $10k — internal volume at/below this scores ~0.0 for the volume dimension.
+LOUVAIN_VOLUME_CAP_CENTS = int(os.getenv("LOUVAIN_VOLUME_CAP_CENTS", "1000000000"))
+# $10M — internal volume at/above this scores 1.0 (log scale between floor and cap).
+
+LOUVAIN_OVERLAP_REF = float(os.getenv("LOUVAIN_OVERLAP_REF", "0.25"))
+# Fraction of members already flagged by OTHER detectors at which overlap_score
+# saturates (0.25 → a quarter of the community already flagged = maximum signal).
+
+# Score thresholds → risk level (lower-bound, inclusive). Communities scoring
+# below MEDIUM are NOT persisted to risk_flags (node props are still written).
+LOUVAIN_LEVEL_MEDIUM = float(os.getenv("LOUVAIN_LEVEL_MEDIUM", "0.40"))
+LOUVAIN_LEVEL_HIGH = float(os.getenv("LOUVAIN_LEVEL_HIGH", "0.65"))
+LOUVAIN_LEVEL_CRITICAL = float(os.getenv("LOUVAIN_LEVEL_CRITICAL", "0.85"))
