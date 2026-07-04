@@ -236,3 +236,60 @@ class TestScoreCommunity:
                 internal_total_cents=0,
                 flagged_member_count=0,
             )
+
+
+# ---------------------------------------------------------------------------
+# PostgresClient.get_flagged_account_ids (query construction — connection faked)
+# ---------------------------------------------------------------------------
+
+class _FakeConn:
+    def __init__(self, rows):
+        self.rows = rows
+        self.calls = []
+
+    async def fetch(self, query, *args):
+        self.calls.append((query, args))
+        return self.rows
+
+
+class _FakeAcquire:
+    def __init__(self, conn):
+        self.conn = conn
+
+    async def __aenter__(self):
+        return self.conn
+
+    async def __aexit__(self, *exc):
+        return False
+
+
+@pytest.mark.asyncio
+async def test_get_flagged_account_ids_excludes_flag_type(monkeypatch):
+    from db.postgres import PostgresClient
+
+    client = PostgresClient()
+    conn = _FakeConn(rows=[{"account_id": "ACC1"}, {"account_id": "ACC2"}])
+    monkeypatch.setattr(client, "_get_connection", lambda: _FakeAcquire(conn))
+
+    ids = await client.get_flagged_account_ids(status="open", exclude_flag_type="COMMUNITY")
+
+    assert ids == ["ACC1", "ACC2"]
+    query, args = conn.calls[0]
+    assert "flag_type <>" in query
+    assert args == ("open", "COMMUNITY")
+
+
+@pytest.mark.asyncio
+async def test_get_flagged_account_ids_without_exclusion(monkeypatch):
+    from db.postgres import PostgresClient
+
+    client = PostgresClient()
+    conn = _FakeConn(rows=[])
+    monkeypatch.setattr(client, "_get_connection", lambda: _FakeAcquire(conn))
+
+    ids = await client.get_flagged_account_ids()
+
+    assert ids == []
+    query, args = conn.calls[0]
+    assert "flag_type" not in query
+    assert args == ("open",)

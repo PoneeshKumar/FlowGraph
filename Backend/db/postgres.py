@@ -383,6 +383,47 @@ class PostgresClient:
             rows = await conn.fetch(query, *params)
             return [dict(row) for row in rows]
 
+    async def get_flagged_account_ids(
+        self,
+        status: str = "open",
+        exclude_flag_type: Optional[str] = None,
+    ) -> List[str]:
+        """
+        Distinct account IDs appearing in risk_flags with the given status.
+
+        exclude_flag_type exists so a detector can measure corroboration from
+        OTHER detectors without feeding on its own output: the community scorer
+        passes exclude_flag_type='COMMUNITY', otherwise yesterday's community
+        flag would inflate today's overlap score in a feedback loop.
+
+        Args:
+            status:            Flag status to include ('open' by default)
+            exclude_flag_type: Skip flags of this detector type, or None for all
+
+        Returns:
+            Sorted list of distinct account IDs
+        """
+        if exclude_flag_type:
+            query = """
+            SELECT DISTINCT unnest(account_ids) AS account_id
+            FROM risk_flags
+            WHERE status = $1 AND flag_type <> $2
+            ORDER BY account_id
+            """
+            args = (status, exclude_flag_type)
+        else:
+            query = """
+            SELECT DISTINCT unnest(account_ids) AS account_id
+            FROM risk_flags
+            WHERE status = $1
+            ORDER BY account_id
+            """
+            args = (status,)
+
+        async with self._get_connection() as conn:
+            rows = await conn.fetch(query, *args)
+        return [row["account_id"] for row in rows]
+
     async def health_check(self) -> bool:
         """Test database connection."""
         try:
