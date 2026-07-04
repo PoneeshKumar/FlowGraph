@@ -12,11 +12,14 @@ import math
 import pytest
 
 from fraud.community_detector import (
+    CommunityDetector,
     build_undirected_graph,
+    community_conductance,
     community_fingerprint,
     core_members,
     edge_weight,
     score_community,
+    split_disconnected,
 )
 
 pytestmark = pytest.mark.unit
@@ -293,3 +296,182 @@ async def test_get_flagged_account_ids_without_exclusion(monkeypatch):
     query, args = conn.calls[0]
     assert "flag_type" not in query
     assert args == ("open",)
+
+
+# ---------------------------------------------------------------------------
+# split_disconnected + community_conductance (pure helpers)
+# ---------------------------------------------------------------------------
+
+class TestSplitDisconnected:
+    def test_connected_community_passes_through(self):
+        g = build_undirected_graph([
+            {"src": "A", "dst": "B", "total_amount": 0, "tx_count": 1},
+            {"src": "B", "dst": "C", "total_amount": 0, "tx_count": 1},
+        ], weight_mode="tx_count")
+        assert split_disconnected([{"A", "B", "C"}], g) == [{"A", "B", "C"}]
+
+    def test_disconnected_community_is_split(self):
+        # One 'community' spanning two disjoint edges must break into two pieces.
+        g = build_undirected_graph([
+            {"src": "A", "dst": "B", "total_amount": 0, "tx_count": 1},
+            {"src": "C", "dst": "D", "total_amount": 0, "tx_count": 1},
+        ], weight_mode="tx_count")
+        out = split_disconnected([{"A", "B", "C", "D"}], g)
+        assert {frozenset(s) for s in out} == {frozenset({"A", "B"}), frozenset({"C", "D"})}
+
+
+class TestCommunityConductance:
+    def test_isolated_component_has_zero_conductance(self):
+        g = build_undirected_graph([
+            {"src": "A", "dst": "B", "total_amount": 0, "tx_count": 1},
+            {"src": "C", "dst": "D", "total_amount": 0, "tx_count": 1},
+        ], weight_mode="tx_count")
+        assert community_conductance(g, {"A", "B"}) == 0.0
+
+    def test_whole_graph_conductance_is_zero_not_error(self):
+        # S == all nodes → empty complement → nx.conductance divides by zero;
+        # the helper must guard and return 0.0, not raise.
+        g = build_undirected_graph([
+            {"src": "A", "dst": "B", "total_amount": 0, "tx_count": 1},
+        ], weight_mode="tx_count")
+        assert community_conductance(g, {"A", "B"}) == 0.0
+
+
+# ---------------------------------------------------------------------------
+# CommunityDetector orchestration (fake clients)
+# ---------------------------------------------------------------------------
+
+class FakeNeo4j:
+    def __init__(self, edges):
+        self.edges = edges
+        self.assignments = None
+        self.detected_at = None
+
+    async def export_flows_to_edges(self, **kwargs):
+        return self.edges
+
+    async def write_community_assignments(self, assignments, detected_at_epoch, **kwargs):
+        self.assignments = assignments
+        self.detected_at = detected_at_epoch
+        return len(assignments)
+
+
+class FakePostgres:
+    def __init__(self, flagged=()):
+        self.flagged = list(flagged)
+        self.upserts = []
+        self.lookup_kwargs = None
+
+    async def get_flagged_account_ids(self, **kwargs):
+        self.lookup_kwargs = kwargs
+        return self.flagged
+
+    async def upsert_risk_flag(self, **kwargs):
+        self.upserts.append(kwargs)
+
+
+def _two_community_edges():
+    """
+    Two disconnected clusters (Louvain must separate disconnected components):
+      - suspicious: 8 accounts S0..S7, complete graph, $50k per corridor,
+        S0 and S1 already flagged by the cycle detector
+      - benign: B0—B1—B2 chain, $200 per corridor
+    """
+    edges = []
+    suspicious = [f"S{i}" for i in range(8)]
+    for i in range(8):
+        for j in range(i + 1, 8):
+            edges.append({
+                "src": suspicious[i], "dst": suspicious[j],
+                "total_amount": 5_000_000, "tx_count": 3,
+            })
+    edges.append({"src": "B0", "dst": "B1", "total_amount": 20_000, "tx_count": 1})
+    edges.append({"src": "B1", "dst": "B2", "total_amount": 20_000, "tx_count": 1})
+    return edges
+
+
+@pytest.mark.asyncio
+async def test_detector_flags_suspicious_community_only():
+    neo4j = FakeNeo4j(_two_community_edges())
+    postgres = FakePostgres(flagged=["S0", "S1"])
+    detector = CommunityDetector(neo4j, postgres)
+
+    result = await detector.run()
+
+    # Both communities kept (benign trio meets MIN_COMMUNITY_SIZE=3) …
+    assert result["communities"] == 2
+    # … all 11 accounts got node-property assignments …
+    assert result["assignments"] == 11
+    assert set(neo4j.assignments.keys()) == {f"S{i}" for i in range(8)} | {"B0", "B1", "B2"}
+    # … but only the dense high-volume corroborated cluster was flagged.
+    assert len(postgres.upserts) == 1
+    flag = postgres.upserts[0]
+    assert flag["flag_type"] == "COMMUNITY"
+    assert sorted(flag["account_ids"]) == [f"S{i}" for i in range(8)]
+    assert flag["risk_level"] == "critical"
+    assert flag["explanation"]
+    assert flag["details"]["community_id"] == flag["fingerprint"][:12]
+    assert flag["details"]["core_members"]
+
+
+@pytest.mark.asyncio
+async def test_detector_excludes_own_flag_type_from_overlap():
+    neo4j = FakeNeo4j(_two_community_edges())
+    postgres = FakePostgres()
+    detector = CommunityDetector(neo4j, postgres)
+
+    await detector.run()
+
+    assert postgres.lookup_kwargs == {"status": "open", "exclude_flag_type": "COMMUNITY"}
+
+
+@pytest.mark.asyncio
+async def test_detector_assigns_members_of_same_community_same_id():
+    neo4j = FakeNeo4j(_two_community_edges())
+    detector = CommunityDetector(neo4j, FakePostgres())
+
+    await detector.run()
+
+    s_ids = {neo4j.assignments[f"S{i}"] for i in range(8)}
+    b_ids = {neo4j.assignments[b] for b in ("B0", "B1", "B2")}
+    assert len(s_ids) == 1
+    assert len(b_ids) == 1
+    assert s_ids != b_ids
+
+
+@pytest.mark.asyncio
+async def test_detector_skips_undersized_communities():
+    edges = [{"src": "X", "dst": "Y", "total_amount": 5_000_000, "tx_count": 2}]
+    neo4j = FakeNeo4j(edges)
+    detector = CommunityDetector(neo4j, FakePostgres())
+
+    result = await detector.run()
+
+    assert result["communities"] == 0
+    assert result["assignments"] == 0
+    assert neo4j.assignments == {}
+
+
+@pytest.mark.asyncio
+async def test_detector_empty_graph_is_a_noop():
+    neo4j = FakeNeo4j([])
+    postgres = FakePostgres()
+    detector = CommunityDetector(neo4j, postgres)
+
+    result = await detector.run()
+
+    assert result == {"communities": 0, "assignments": 0, "flags": []}
+    assert postgres.upserts == []
+
+
+@pytest.mark.asyncio
+async def test_detector_without_postgres_still_returns_flags():
+    neo4j = FakeNeo4j(_two_community_edges())
+    detector = CommunityDetector(neo4j, postgres_client=None)
+
+    result = await detector.run()
+
+    # No overlap signal (max composite 0.65) but volume+density+size still
+    # clear the medium bar; flags are computed and returned, just not persisted.
+    assert len(result["flags"]) == 1
+    assert result["flags"][0]["risk_level"] in ("medium", "high")

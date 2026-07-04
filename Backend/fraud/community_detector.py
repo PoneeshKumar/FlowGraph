@@ -27,7 +27,8 @@ from __future__ import annotations
 import hashlib
 import logging
 import math
-from typing import Any, Dict, Iterable, List
+from datetime import datetime, timezone
+from typing import Any, Dict, Iterable, List, Optional, Set
 
 import networkx as nx
 
@@ -299,3 +300,189 @@ def score_community(
         "explanation": explanation,
         "details":     details,
     }
+
+
+# ---------------------------------------------------------------------------
+# Connectivity + conductance helpers (pure — operate on the built graph)
+# ---------------------------------------------------------------------------
+
+def community_conductance(graph: nx.Graph, members: Iterable[str]) -> float:
+    """
+    Fraction of a community's edge weight that crosses its boundary.
+
+    Low = an isolated cluster money stays inside (suspicious); high = a dense
+    sub-region of otherwise-normal traffic. Returns 0.0 for a community that
+    spans the whole graph — there is no boundary, and nx.conductance would
+    divide by zero (empty complement).
+    """
+    member_set = set(members)
+    if len(member_set) >= graph.number_of_nodes():
+        return 0.0
+    try:
+        return nx.conductance(graph, member_set, weight="weight")
+    except ZeroDivisionError:
+        return 0.0
+
+
+def split_disconnected(
+    communities: Iterable[Iterable[str]],
+    graph: nx.Graph,
+) -> List[Set[str]]:
+    """
+    Split any internally-disconnected community into its connected components.
+
+    Louvain can assign nodes with no path between them to the same community — a
+    documented modularity-optimization defect (fixed by construction under the
+    Leiden engine). A disconnected 'community' would corrupt core_members and the
+    fingerprint identity, so we break it into genuinely-connected pieces before
+    scoring. Under Leiden this is a cheap no-op (communities are already connected).
+    """
+    result: List[Set[str]] = []
+    for community in communities:
+        members = set(community)
+        sub = graph.subgraph(members)
+        if sub.number_of_nodes() <= 1 or nx.is_connected(sub):
+            result.append(members)
+        else:
+            for component in nx.connected_components(sub):
+                result.append(set(component))
+    return result
+
+
+# ---------------------------------------------------------------------------
+# Detector (requires live Neo4j + Postgres connections)
+# ---------------------------------------------------------------------------
+
+class CommunityDetector:
+    """
+    Runs the daily Louvain batch: export → cluster → score → persist.
+
+    Args:
+        neo4j_client:    Initialized Neo4jClient (db.neo4j)
+        postgres_client: Initialized PostgresClient (db.postgres), or None to
+                         compute without persisting flags / overlap lookups
+    """
+
+    def __init__(self, neo4j_client: Any, postgres_client: Any) -> None:
+        self.neo4j = neo4j_client
+        self.postgres = postgres_client
+
+    async def run(
+        self,
+        reference_time: Optional[datetime] = None,
+    ) -> Dict[str, Any]:
+        """
+        One full batch pass.
+
+        Steps:
+        1. Export FLOWS_TO edges active within LOUVAIN_WINDOW_DAYS
+        2. Build the undirected weighted graph, run seeded Louvain
+        3. Split any internally-disconnected community into connected components
+        4. Drop communities under LOUVAIN_MIN_COMMUNITY_SIZE (noise)
+        5. Fingerprint each community on its top-K core; community_id = fp[:12]
+        6. Score 5-dimensionally (isolation via conductance; overlap uses flags
+           from OTHER detectors)
+        7. Persist flags scoring >= LOUVAIN_LEVEL_MEDIUM to risk_flags
+        8. Write community_id node properties for ALL kept communities
+
+        Args:
+            reference_time: Window anchor / detected_at timestamp; defaults to
+                            now (benchmarks pass the dataset's max timestamp)
+
+        Returns:
+            {"communities": kept count, "assignments": node props written,
+             "flags": list of flag dicts (persisted ones when postgres present)}
+        """
+        ref = reference_time if reference_time is not None else datetime.now(timezone.utc)
+
+        edges = await self.neo4j.export_flows_to_edges(
+            window_days=LOUVAIN_WINDOW_DAYS, reference_time=ref
+        )
+        graph = build_undirected_graph(edges)
+        if graph.number_of_nodes() == 0:
+            logger.info("Louvain batch: no active FLOWS_TO edges in window — nothing to do")
+            return {"communities": 0, "assignments": 0, "flags": []}
+
+        raw_communities = nx.community.louvain_communities(
+            graph,
+            weight="weight",
+            resolution=LOUVAIN_RESOLUTION,
+            seed=LOUVAIN_SEED,
+        )
+        # Guarantee each community is internally connected before it earns an
+        # identity/fingerprint (Louvain can emit disconnected communities).
+        communities = split_disconnected(raw_communities, graph)
+
+        flagged_accounts: Set[str] = set()
+        if self.postgres is not None:
+            flagged_accounts = set(
+                await self.postgres.get_flagged_account_ids(
+                    status="open", exclude_flag_type="COMMUNITY"
+                )
+            )
+
+        assignments: Dict[str, str] = {}
+        flags: List[Dict[str, Any]] = []
+        kept = 0
+
+        for community in communities:
+            members = sorted(community)
+            if len(members) < LOUVAIN_MIN_COMMUNITY_SIZE:
+                continue
+            kept += 1
+
+            core = core_members(graph, members)
+            fingerprint = community_fingerprint(core)
+            community_id = fingerprint[:12]
+            for member in members:
+                assignments[member] = community_id
+
+            sub = graph.subgraph(members)
+            internal_total = sum(
+                attrs["total_amount"] for _, _, attrs in sub.edges(data=True)
+            )
+            scored = score_community(
+                member_ids=members,
+                internal_edge_count=sub.number_of_edges(),
+                internal_total_cents=internal_total,
+                flagged_member_count=len(flagged_accounts & set(members)),
+                conductance=community_conductance(graph, members),
+            )
+
+            if scored["risk_score"] < LOUVAIN_LEVEL_MEDIUM:
+                continue
+
+            scored["details"]["community_id"] = community_id
+            scored["details"]["core_members"] = core
+
+            if self.postgres is not None:
+                await self.postgres.upsert_risk_flag(
+                    flag_type="COMMUNITY",
+                    fingerprint=fingerprint,
+                    account_ids=members,
+                    risk_level=scored["risk_level"],
+                    risk_score=scored["risk_score"],
+                    explanation=scored["explanation"],
+                    details=scored["details"],
+                )
+
+            flags.append({
+                "fingerprint":  fingerprint,
+                "community_id": community_id,
+                "account_ids":  members,
+                **scored,
+            })
+            logger.info(
+                "Community flag | level=%s score=%.2f members=%d id=%s",
+                scored["risk_level"], scored["risk_score"], len(members), community_id,
+            )
+
+        written = await self.neo4j.write_community_assignments(
+            assignments, detected_at_epoch=int(ref.timestamp())
+        )
+
+        logger.info(
+            "Louvain batch done | communities=%d (of %d raw) | assignments=%d | flags=%d",
+            kept, len(communities), written, len(flags),
+        )
+        return {"communities": kept, "assignments": written, "flags": flags}
