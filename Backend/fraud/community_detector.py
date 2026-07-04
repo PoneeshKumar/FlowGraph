@@ -118,3 +118,39 @@ def build_undirected_graph(
                 tx_count=e["tx_count"],
             )
     return graph
+
+
+# ---------------------------------------------------------------------------
+# Community identity (pure)
+# ---------------------------------------------------------------------------
+
+def core_members(
+    graph: nx.Graph,
+    members: Iterable[str],
+    k: int = LOUVAIN_CORE_K,
+) -> List[str]:
+    """
+    The K most-connected members of a community, by weighted degree *within*
+    the community subgraph. Ties break lexicographically so the result — and
+    the fingerprint built on it — is deterministic.
+
+    The core is what stays stable across daily runs while peripheral accounts
+    churn in and out, so it anchors the community's identity.
+    """
+    sub = graph.subgraph(members)
+    ranked = sorted(sub.nodes, key=lambda n: (-sub.degree(n, weight="weight"), n))
+    return sorted(ranked[:k])
+
+
+def community_fingerprint(core: Iterable[str]) -> str:
+    """
+    Stable unique key for a community: sha256 of the sorted core member ids.
+
+    Same core tomorrow → same fingerprint → upsert_risk_flag bumps
+    detection_count instead of spawning a duplicate alert. Blindspot (accepted
+    in design review): if the core itself splits or merges, a new flag is born.
+    """
+    ids = sorted(core)
+    if not ids:
+        raise ValueError("community_fingerprint: empty core")
+    return hashlib.sha256("|".join(ids).encode()).hexdigest()

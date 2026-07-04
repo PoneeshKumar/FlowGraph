@@ -11,7 +11,12 @@ import math
 
 import pytest
 
-from fraud.community_detector import build_undirected_graph, edge_weight
+from fraud.community_detector import (
+    build_undirected_graph,
+    community_fingerprint,
+    core_members,
+    edge_weight,
+)
 
 pytestmark = pytest.mark.unit
 
@@ -78,3 +83,59 @@ class TestBuildUndirectedGraph:
         g = build_undirected_graph(edges)
         assert g.number_of_edges() == 2
         assert set(g.nodes) == {"A", "B", "C"}
+
+
+# ---------------------------------------------------------------------------
+# core_members + community_fingerprint
+# ---------------------------------------------------------------------------
+
+def _weighted_graph():
+    """A=15, B=11, C=7, D=1 weighted degree."""
+    edges = [
+        {"src": "A", "dst": "B", "total_amount": 0, "tx_count": 10},
+        {"src": "A", "dst": "C", "total_amount": 0, "tx_count": 5},
+        {"src": "B", "dst": "C", "total_amount": 0, "tx_count": 1},
+        {"src": "C", "dst": "D", "total_amount": 0, "tx_count": 1},
+    ]
+    return build_undirected_graph(edges, weight_mode="tx_count")
+
+
+class TestCoreMembers:
+    def test_picks_top_k_by_weighted_degree(self):
+        g = _weighted_graph()
+        assert core_members(g, ["A", "B", "C", "D"], k=2) == ["A", "B"]
+
+    def test_k_larger_than_community_returns_all_sorted(self):
+        g = _weighted_graph()
+        assert core_members(g, ["C", "D"], k=10) == ["C", "D"]
+
+    def test_degree_computed_within_subgraph_only(self):
+        # Restricted to {B, C, D}: B–C (1) and C–D (1) → C has degree 2, B and D have 1.
+        g = _weighted_graph()
+        assert core_members(g, ["B", "C", "D"], k=1) == ["C"]
+
+    def test_ties_break_lexicographically(self):
+        edges = [
+            {"src": "X", "dst": "Y", "total_amount": 0, "tx_count": 1},
+            {"src": "Y", "dst": "Z", "total_amount": 0, "tx_count": 1},
+        ]
+        g = build_undirected_graph(edges, weight_mode="tx_count")
+        # X and Z tie at weighted degree 1 → X wins lexicographically
+        assert core_members(g, ["X", "Y", "Z"], k=2) == ["X", "Y"]
+
+
+class TestCommunityFingerprint:
+    def test_order_invariant(self):
+        assert community_fingerprint(["b", "a", "c"]) == community_fingerprint(["c", "a", "b"])
+
+    def test_different_core_different_fingerprint(self):
+        assert community_fingerprint(["a", "b"]) != community_fingerprint(["a", "c"])
+
+    def test_is_64_hex_chars(self):
+        fp = community_fingerprint(["a"])
+        assert len(fp) == 64
+        int(fp, 16)  # raises if not hex
+
+    def test_empty_core_raises(self):
+        with pytest.raises(ValueError):
+            community_fingerprint([])
