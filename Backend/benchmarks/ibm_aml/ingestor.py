@@ -46,7 +46,12 @@ class IngestStats:
 
 
 def _make_txn_id(ts_raw: str, from_key: str, to_key: str, amount_paid: str) -> str:
-    """Deterministic transaction ID — hash of key fields (no UUID4 randomness)."""
+    """
+    Deterministic transaction ID from key fields.
+
+    Required for outbox idempotency: retried ingests of the same row must produce
+    the same txn_id so that the Neo4j MERGE on txn_id is idempotent.
+    """
     return hashlib.sha256(
         f"{ts_raw}|{from_key}|{to_key}|{amount_paid}".encode()
     ).hexdigest()[:40]

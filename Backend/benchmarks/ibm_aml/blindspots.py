@@ -22,11 +22,12 @@ Usage:
 from __future__ import annotations
 
 import json
+import logging
 from dataclasses import dataclass, field, asdict
 from datetime import datetime, timezone
 from typing import Optional
 
-from benchmarks.ibm_aml.patterns import CycleGroup
+from benchmarks.ibm_aml.patterns import CycleGroup, _parse_ts
 from config import (
     CYCLE_WINDOW_HOURS,
     CYCLE_MAX_HOP_GAP_HOURS,
@@ -34,6 +35,8 @@ from config import (
     CYCLE_MAX_LEAK,
     CYCLE_MAX_DEPTH,
 )
+
+logger = logging.getLogger(__name__)
 
 
 MISS_CAUSES = [
@@ -73,7 +76,7 @@ class BlindspotReport:
     max_hop_gap_hours: float = CYCLE_MAX_HOP_GAP_HOURS
     min_value_cents: int = CYCLE_MIN_VALUE_CENTS
     max_leak: float = CYCLE_MAX_LEAK
-    max_depth: int = CYCLE_MAX_DEPTH
+    max_depth: int | None = CYCLE_MAX_DEPTH
 
     def summary(self) -> str:
         lines = [
@@ -131,14 +134,13 @@ def _attribute_miss(group: CycleGroup, now_epoch: int) -> str:
     currencies: list[str] = []
 
     for row in group.raw_rows:
-        from benchmarks.ibm_aml.patterns import _parse_ts
         ts = _parse_ts(row.get("Timestamp", ""))
         if ts:
             timestamps.append(ts.timestamp())
         try:
-            amounts.append(int(float(row.get("Amount Paid", "0")) * 100))
+            amounts.append(round(float(row.get("Amount Paid", "0")) * 100))
         except ValueError:
-            pass
+            logger.debug(f"Failed to parse amount from row: {row}")
         currencies.append(row.get("Payment Currency", "").strip())
 
     timestamps.sort()
