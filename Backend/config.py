@@ -176,3 +176,10 @@ LOUVAIN_OVERLAP_REF = float(os.getenv("LOUVAIN_OVERLAP_REF", "0.25"))
 LOUVAIN_LEVEL_MEDIUM = float(os.getenv("LOUVAIN_LEVEL_MEDIUM", "0.40"))
 LOUVAIN_LEVEL_HIGH = float(os.getenv("LOUVAIN_LEVEL_HIGH", "0.65"))
 LOUVAIN_LEVEL_CRITICAL = float(os.getenv("LOUVAIN_LEVEL_CRITICAL", "0.85"))
+
+LOUVAIN_ENGINE = os.getenv("LOUVAIN_ENGINE", "networkx").lower()
+# Community-detection engine:
+#   "networkx" — pure-Python networkx Louvain, zero extra dependencies. Default.
+#   "leiden"   — leidenalg/igraph Leiden: C/C++ core (faster on large graphs),
+#                communities internally connected by construction. Requires the
+#                optional igraph + leidenalg (GPL) packages to be installed.

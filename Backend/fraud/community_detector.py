@@ -46,6 +46,7 @@ from config import (
     LOUVAIN_LEVEL_MEDIUM,
     LOUVAIN_LEVEL_HIGH,
     LOUVAIN_LEVEL_CRITICAL,
+    LOUVAIN_ENGINE,
 )
 
 logger = logging.getLogger(__name__)
@@ -350,6 +351,69 @@ def split_disconnected(
 
 
 # ---------------------------------------------------------------------------
+# Engine dispatch (networkx Louvain default; optional leidenalg Leiden)
+# ---------------------------------------------------------------------------
+
+def partition_graph(
+    graph: nx.Graph,
+    engine: str = LOUVAIN_ENGINE,
+    resolution: float = LOUVAIN_RESOLUTION,
+    seed: int = LOUVAIN_SEED,
+) -> List[Set[str]]:
+    """
+    Partition an undirected weighted graph into communities.
+
+    engine="networkx" (default): pure-Python networkx Louvain, zero extra deps.
+    engine="leiden": leidenalg over igraph — C/C++ core, faster on large graphs,
+      communities internally connected by construction (the caller still runs
+      split_disconnected defensively, which is then a no-op).
+
+    The networkx→igraph conversion the leiden path adds is a single O(E) pass and
+    is dwarfed by the clustering; both engines share the same real ceiling (the
+    exported edge list fitting in Python memory).
+    """
+    if engine == "networkx":
+        return [
+            set(c)
+            for c in nx.community.louvain_communities(
+                graph, weight="weight", resolution=resolution, seed=seed
+            )
+        ]
+    if engine == "leiden":
+        return _leiden_partition(graph, resolution=resolution, seed=seed)
+    raise ValueError(f"unknown LOUVAIN_ENGINE: {engine!r}")
+
+
+def _leiden_partition(graph: nx.Graph, resolution: float, seed: int) -> List[Set[str]]:
+    """
+    Leiden community detection via leidenalg/igraph. Imported lazily so the
+    default networkx engine never requires the optional GPL dependencies.
+
+    build_undirected_graph never produces isolated nodes (every node comes from
+    an edge), so TupleList captures all of them; the empty-graph guard covers the
+    no-edge case for symmetry with the networkx path.
+    """
+    import igraph as ig
+    import leidenalg as la
+
+    if graph.number_of_edges() == 0:
+        return [{n} for n in graph.nodes]
+
+    g_ig = ig.Graph.TupleList(
+        ((u, v, d["weight"]) for u, v, d in graph.edges(data=True)),
+        weights=True,
+    )
+    partition = la.find_partition(
+        g_ig,
+        la.RBConfigurationVertexPartition,  # modularity + resolution — the louvain_communities analog
+        weights="weight",
+        resolution_parameter=resolution,
+        seed=seed,
+    )
+    return [set(g_ig.vs[idx]["name"] for idx in community) for community in partition]
+
+
+# ---------------------------------------------------------------------------
 # Detector (requires live Neo4j + Postgres connections)
 # ---------------------------------------------------------------------------
 
@@ -403,12 +467,7 @@ class CommunityDetector:
             logger.info("Louvain batch: no active FLOWS_TO edges in window — nothing to do")
             return {"communities": 0, "assignments": 0, "flags": []}
 
-        raw_communities = nx.community.louvain_communities(
-            graph,
-            weight="weight",
-            resolution=LOUVAIN_RESOLUTION,
-            seed=LOUVAIN_SEED,
-        )
+        raw_communities = partition_graph(graph)
         # Guarantee each community is internally connected before it earns an
         # identity/fingerprint (Louvain can emit disconnected communities).
         communities = split_disconnected(raw_communities, graph)

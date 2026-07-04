@@ -18,6 +18,7 @@ from fraud.community_detector import (
     community_fingerprint,
     core_members,
     edge_weight,
+    partition_graph,
     score_community,
     split_disconnected,
 )
@@ -475,3 +476,40 @@ async def test_detector_without_postgres_still_returns_flags():
     # clear the medium bar; flags are computed and returned, just not persisted.
     assert len(result["flags"]) == 1
     assert result["flags"][0]["risk_level"] in ("medium", "high")
+
+
+# ---------------------------------------------------------------------------
+# partition_graph engine dispatch
+# ---------------------------------------------------------------------------
+
+def _two_triangles():
+    """Two disconnected triangles — any correct engine returns exactly these two."""
+    edges = []
+    for a, b, c in (("A", "B", "C"), ("X", "Y", "Z")):
+        edges += [
+            {"src": a, "dst": b, "total_amount": 0, "tx_count": 5},
+            {"src": b, "dst": c, "total_amount": 0, "tx_count": 5},
+            {"src": a, "dst": c, "total_amount": 0, "tx_count": 5},
+        ]
+    return build_undirected_graph(edges, weight_mode="tx_count")
+
+
+class TestPartitionGraph:
+    def test_networkx_engine_finds_both_clusters(self):
+        parts = partition_graph(_two_triangles(), engine="networkx")
+        assert {frozenset(p) for p in parts} == {
+            frozenset({"A", "B", "C"}), frozenset({"X", "Y", "Z"})
+        }
+
+    def test_leiden_engine_finds_both_clusters(self):
+        pytest.importorskip("leidenalg")
+        pytest.importorskip("igraph")
+        parts = partition_graph(_two_triangles(), engine="leiden")
+        assert {frozenset(p) for p in parts} == {
+            frozenset({"A", "B", "C"}), frozenset({"X", "Y", "Z"})
+        }
+        assert sum(len(p) for p in parts) == 6  # every node placed exactly once
+
+    def test_unknown_engine_raises(self):
+        with pytest.raises(ValueError):
+            partition_graph(_two_triangles(), engine="bogus")
