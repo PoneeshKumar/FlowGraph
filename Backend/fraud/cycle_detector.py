@@ -75,22 +75,35 @@ def score_cycle(
           details: dict     (raw numbers for audit trail)
         }
     """
-    if not amounts or not timestamps:
-        raise ValueError("amounts and timestamps must be non-empty")
+    if not amounts:
+        raise ValueError("amounts must be non-empty")
+    if not timestamps:
+        raise ValueError("timestamps must be non-empty")
     if len(amounts) != len(timestamps):
-        raise ValueError("amounts and timestamps must have equal length")
+        raise ValueError(
+            f"amounts and timestamps must have equal length "
+            f"(got {len(amounts)} amounts, {len(timestamps)} timestamps)"
+        )
 
     n_hops = len(amounts)
     total_cents = sum(amounts)
     min_hop_cents = min(amounts)
     mean_cents = total_cents / n_hops
 
-    # Span of the loop in seconds
+    # Span of the loop in seconds. Deliberately plain min/max, not numpy: a
+    # cycle is at most CYCLE_MAX_DEPTH (6) hops, so a handful of Python ints
+    # beats the array-conversion overhead, and it keeps span_seconds a plain
+    # int — numpy scalars aren't JSON-serializable, and this value flows into
+    # `details`, which gets json.dumps'd by postgres.upsert_risk_flag.
     span_seconds = max(timestamps) - min(timestamps)
     span_hours = span_seconds / 3600.0
 
     # --- 1. Value score (0.0–1.0) ---
     # Scale: $1k (floor) → 0.0, $1M+ → 1.0 (log scale)
+    # Plain stdlib math.log, not numpy: `np.math` was just a re-export of this
+    # same stdlib module (removed in numpy >= 1.25), so it isn't a distinct,
+    # faster implementation — and pulling in numpy for one scalar log() call
+    # only adds a dependency, not speed.
     _min_cents = max(CYCLE_MIN_VALUE_CENTS, 1)
     _max_cents = 100_000_000  # $1M cap for normalization
     value_score = min(
@@ -146,7 +159,10 @@ def score_cycle(
     span_display = (
         f"{span_hours:.1f}h" if span_hours < 48 else f"{span_hours/24:.1f}d"
     )
-    consistency_pct = round(consistency_score * 100)
+    # 2 decimal places, not a rounded int: round(x) uses banker's rounding
+    # (round(0.5) == 0), which would silently misreport values landing on a
+    # .5 boundary after scaling to a percentage.
+    consistency_pct = round(consistency_score * 100, 2)
 
     explanation = (
         f"Circular money flow detected across {unique_accounts} accounts "

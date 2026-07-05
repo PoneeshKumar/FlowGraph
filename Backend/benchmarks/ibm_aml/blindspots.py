@@ -24,7 +24,7 @@ from __future__ import annotations
 import json
 import logging
 from dataclasses import dataclass, field, asdict
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Optional
 
 from benchmarks.ibm_aml.patterns import CycleGroup, _parse_ts
@@ -125,18 +125,23 @@ def _attribute_miss(group: CycleGroup, now_epoch: int) -> str:
     We simulate the filter logic from find_cycles and the Python post-processing
     using only the metadata already in CycleGroup (no live Neo4j call needed).
     """
-    window_start = now_epoch - int(CYCLE_WINDOW_HOURS * 3600)
-    max_hop_gap_s = int(CYCLE_MAX_HOP_GAP_HOURS * 3600)
+    window_start = datetime.fromtimestamp(now_epoch, tz=timezone.utc) - timedelta(
+        hours=CYCLE_WINDOW_HOURS
+    )
+    max_hop_gap = timedelta(hours=CYCLE_MAX_HOP_GAP_HOURS)
 
-    # Reconstruct ordered timestamps from raw_rows (best effort)
-    timestamps: list[float] = []
+    # Reconstruct ordered timestamps from raw_rows (best effort). Kept as
+    # datetime objects (not raw floats) end to end — comparisons below read
+    # as "is this hop older than the window" / "is this gap too wide", not
+    # arithmetic on opaque epoch numbers.
+    timestamps: list[datetime] = []
     amounts: list[int] = []
     currencies: list[str] = []
 
     for row in group.raw_rows:
         ts = _parse_ts(row.get("Timestamp", ""))
         if ts:
-            timestamps.append(ts.timestamp())
+            timestamps.append(ts)
         try:
             amounts.append(round(float(row.get("Amount Paid", "0")) * 100))
         except ValueError:
@@ -149,9 +154,12 @@ def _attribute_miss(group: CycleGroup, now_epoch: int) -> str:
     if timestamps and min(timestamps) < window_start:
         return "OUTSIDE_WINDOW"
 
-    # 2. HOP_GAP — any consecutive pair more than MAX_HOP_GAP apart
-    for i in range(len(timestamps) - 1):
-        if timestamps[i + 1] - timestamps[i] > max_hop_gap_s:
+    # 2. HOP_GAP — any consecutive pair more than MAX_HOP_GAP apart. A cycle
+    # group is bounded by CYCLE_MAX_DEPTH (a handful of hops), so this is a
+    # few comparisons — not the kind of scale a DataFrame/array conversion
+    # would pay off on; zip-over-pairs is the plain, allocation-free version.
+    for prev_ts, curr_ts in zip(timestamps, timestamps[1:]):
+        if curr_ts - prev_ts > max_hop_gap:
             return "HOP_GAP"
 
     # 3. AMOUNT_FLOOR — weakest hop below the floor
