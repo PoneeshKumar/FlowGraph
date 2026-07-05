@@ -37,3 +37,8 @@ lerna-debug.log*
 # Benchmark data and results (large files — download manually from Kaggle)
 Backend/benchmarks/data/
 Backend/benchmarks/results/
+.gstack/
+
+# Generated dev visualiser output
+Backend/flowgraph_graph.html
+Backend/viz_shot.png
