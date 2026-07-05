@@ -436,17 +436,21 @@ function frame() {
 
 // ---- interaction ----
 let drag = null; // {node} or {pan, startX, startY, tx0, ty0}
-function pick(sx, sy) {
-  const w = toWorld(sx, sy); let best = null, bestD = 14 / scale;
+// nearestNode/nearestLink return {target, d} — d is the true geometric distance
+// (node: distance to its surface; link: perpendicular distance to the segment)
+// so callers can compare them directly instead of one always shadowing the other.
+function nearestNode(sx, sy) {
+  const w = toWorld(sx, sy); let best = null, bestD = Infinity;
   for (const n of nodes) {
     if (!nodeVisible(n)) continue;
-    const dx = n.x - w.x, dy = n.y - w.y; const d = Math.sqrt(dx*dx+dy*dy) - radius(n);
+    const dx = n.x - w.x, dy = n.y - w.y;
+    const d = Math.hypot(dx, dy) - radius(n);
     if (d < bestD) { bestD = d; best = n; }
   }
-  return best;
+  return {node: best, d: bestD};
 }
-function pickLink(sx, sy) {
-  const w = toWorld(sx, sy); let best = null, bestD = 6 / scale;
+function nearestLink(sx, sy) {
+  const w = toWorld(sx, sy); let best = null, bestD = Infinity;
   for (const l of links) {
     if (!nodeVisible(l.source) || !nodeVisible(l.target)) continue;
     const {x: ax, y: ay} = l.source, {x: bx, y: by} = l.target;
@@ -457,11 +461,11 @@ function pickLink(sx, sy) {
     const d = Math.hypot(w.x - px, w.y - py);
     if (d < bestD) { bestD = d; best = l; }
   }
-  return best;
+  return {link: best, d: bestD};
 }
 canvas.addEventListener('mousedown', e => {
-  const n = pick(e.clientX, e.clientY);
-  if (n) { drag = {node: n}; n.fixed = true; }
+  const {node, d} = nearestNode(e.clientX, e.clientY);
+  if (node && d < 14 / scale) { drag = {node}; node.fixed = true; }
   else drag = {pan: true, startX: e.clientX, startY: e.clientY, tx0: tx, ty0: ty};
 });
 window.addEventListener('mousemove', e => {
@@ -474,8 +478,18 @@ window.addEventListener('mousemove', e => {
     tx = drag.tx0 + (e.clientX - drag.startX); ty = drag.ty0 + (e.clientY - drag.startY);
     draw(); return;
   }
-  const n = pick(e.clientX, e.clientY);
-  const l = n ? null : pickLink(e.clientX, e.clientY);
+  // Hover: pick whichever of node-surface / edge-line is ACTUALLY closer to the
+  // cursor, each within its own tight threshold. A node's generous drag radius
+  // (14/scale) would otherwise swallow entire short edges at typical zoom —
+  // this compares real distances instead of letting node hover always win.
+  const nn = nearestNode(e.clientX, e.clientY);
+  const nl = nearestLink(e.clientX, e.clientY);
+  const nodeOk = nn.node && nn.d < 8 / scale;
+  const linkOk = nl.link && nl.d < 5 / scale;
+  let n = null, l = null;
+  if (nodeOk && linkOk) { if (nn.d <= nl.d) n = nn.node; else l = nl.link; }
+  else if (nodeOk) n = nn.node;
+  else if (linkOk) l = nl.link;
   if (n !== hovered || l !== hoveredLink) { hovered = n; hoveredLink = l; draw(); }
   if (n) {
     tip.style.display = 'block';
