@@ -309,10 +309,23 @@ for (const n of nodes) {
   n.y = H / 2 + Math.sin(a) * R0 + (Math.random() - 0.5) * jitter;
 }
 const radius = n => 3 + Math.sqrt(n.deg) * 1.7;
-// Edge thickness reflects total_amount moved on that corridor (log scale, since
-// amounts span orders of magnitude) — a $5M corridor should visibly outweigh a $50 one.
-const maxAmount = Math.max(1, ...links.map(l => l.amount || 0));
-const edgeWidth = l => 0.6 + (Math.log1p(l.amount || 0) / Math.log1p(maxAmount)) * 4.5;
+// Edge thickness reflects total_amount moved on that corridor. Real transaction
+// data spans a huge range (cents to a single aggregated outlier in the billions),
+// so normalising against the raw max crushes every normal edge to near-zero
+// width. Instead, anchor the scale to the 10th/90th percentile of amounts seen —
+// that band gets the full visible width range, and anything beyond it clamps
+// rather than compressing the middle of the distribution into invisibility.
+function _percentile(sortedArr, p) {
+  if (!sortedArr.length) return 0;
+  return sortedArr[Math.min(sortedArr.length - 1, Math.floor(p * sortedArr.length))];
+}
+const _amountsSorted = links.map(l => l.amount || 0).sort((a, b) => a - b);
+const _logLo = Math.log1p(_percentile(_amountsSorted, 0.10));
+const _logHi = Math.max(_logLo + 0.01, Math.log1p(_percentile(_amountsSorted, 0.90)));
+const edgeWidth = l => {
+  const t = (Math.log1p(l.amount || 0) - _logLo) / (_logHi - _logLo);
+  return 0.7 + Math.max(0, Math.min(1, t)) * 6.3; // 0.7px (bottom decile) -> 7px (top decile+)
+};
 const fmtUsd = cents => '$' + (cents / 100).toLocaleString(undefined, {maximumFractionDigits: 0});
 
 // ---- force simulation: Fruchterman-Reingold, temperature-capped ----
