@@ -270,7 +270,7 @@ _HTML_TEMPLATE = r"""<!doctype html>
     <button id="btn-labels">Labels: auto</button>
     <button id="btn-fit">Fit</button>
   </div>
-  <div class="hint">scroll = zoom · drag background = pan · drag node = move · hover = details · click a legend row to isolate</div>
+  <div class="hint">scroll = zoom · drag background = pan · drag node = move · hover node/edge = details (edge thickness = $ moved) · click a legend row to isolate</div>
 </div>
 <div id="legend" class="panel">
   <h2>Communities</h2>
@@ -309,6 +309,11 @@ for (const n of nodes) {
   n.y = H / 2 + Math.sin(a) * R0 + (Math.random() - 0.5) * jitter;
 }
 const radius = n => 3 + Math.sqrt(n.deg) * 1.7;
+// Edge thickness reflects total_amount moved on that corridor (log scale, since
+// amounts span orders of magnitude) — a $5M corridor should visibly outweigh a $50 one.
+const maxAmount = Math.max(1, ...links.map(l => l.amount || 0));
+const edgeWidth = l => 0.6 + (Math.log1p(l.amount || 0) / Math.log1p(maxAmount)) * 4.5;
+const fmtUsd = cents => '$' + (cents / 100).toLocaleString(undefined, {maximumFractionDigits: 0});
 
 // ---- force simulation: Fruchterman-Reingold, temperature-capped ----
 // Repulsion k^2/d diverges as nodes approach (they can never collapse to a
@@ -366,18 +371,21 @@ function fit() {
 // ---- rendering ----
 let labelMode = 'auto'; // auto | all | none
 let isolated = null;     // community cid to isolate, or null
-let hovered = null;
+let hovered = null;      // hovered node
+let hoveredLink = null;  // hovered edge (only checked when no node is hovered)
 function nodeVisible(n) { return isolated === null || n.cid === isolated; }
 function draw() {
   ctx.setTransform(DPR, 0, 0, DPR, 0, 0);
   ctx.clearRect(0, 0, W, H);
   ctx.save();
   ctx.translate(tx, ty); ctx.scale(scale, scale);
-  // links
-  ctx.lineWidth = 0.7 / scale;
+  // links — thickness encodes total_amount moved on that corridor (log scale)
   for (const l of links) {
     const vis = nodeVisible(l.source) && nodeVisible(l.target);
-    ctx.strokeStyle = vis ? 'rgba(148,163,184,0.22)' : 'rgba(148,163,184,0.04)';
+    const highlight = l === hoveredLink;
+    ctx.lineWidth = (highlight ? edgeWidth(l) + 1.5 : edgeWidth(l)) / scale;
+    ctx.strokeStyle = highlight ? 'rgba(255,255,255,0.9)'
+      : vis ? 'rgba(148,163,184,0.32)' : 'rgba(148,163,184,0.05)';
     ctx.beginPath(); ctx.moveTo(l.source.x, l.source.y); ctx.lineTo(l.target.x, l.target.y); ctx.stroke();
   }
   // nodes
@@ -424,6 +432,20 @@ function pick(sx, sy) {
   }
   return best;
 }
+function pickLink(sx, sy) {
+  const w = toWorld(sx, sy); let best = null, bestD = 6 / scale;
+  for (const l of links) {
+    if (!nodeVisible(l.source) || !nodeVisible(l.target)) continue;
+    const {x: ax, y: ay} = l.source, {x: bx, y: by} = l.target;
+    const dx = bx - ax, dy = by - ay; const len2 = dx*dx + dy*dy || 1;
+    let t = ((w.x - ax) * dx + (w.y - ay) * dy) / len2;
+    t = Math.max(0, Math.min(1, t));
+    const px = ax + t * dx, py = ay + t * dy;
+    const d = Math.hypot(w.x - px, w.y - py);
+    if (d < bestD) { bestD = d; best = l; }
+  }
+  return best;
+}
 canvas.addEventListener('mousedown', e => {
   const n = pick(e.clientX, e.clientY);
   if (n) { drag = {node: n}; n.fixed = true; }
@@ -440,13 +462,20 @@ window.addEventListener('mousemove', e => {
     draw(); return;
   }
   const n = pick(e.clientX, e.clientY);
-  if (n !== hovered) { hovered = n; draw(); }
+  const l = n ? null : pickLink(e.clientX, e.clientY);
+  if (n !== hovered || l !== hoveredLink) { hovered = n; hoveredLink = l; draw(); }
   if (n) {
     tip.style.display = 'block';
     tip.style.left = (e.clientX + 14) + 'px'; tip.style.top = (e.clientY + 14) + 'px';
     tip.innerHTML = `<div class="id">${n.id}</div>`
       + `<div><span class="k">community</span> <code>${n.cid}</code></div>`
       + `<div><span class="k">connections</span> ${n.deg}</div>`;
+  } else if (l) {
+    tip.style.display = 'block';
+    tip.style.left = (e.clientX + 14) + 'px'; tip.style.top = (e.clientY + 14) + 'px';
+    tip.innerHTML = `<div><span class="k">${l.source.id.slice(0,10)}… → ${l.target.id.slice(0,10)}…</span></div>`
+      + `<div><span class="k">total moved</span> ${fmtUsd(l.amount)}</div>`
+      + `<div><span class="k">transactions</span> ${l.tx}</div>`;
   } else tip.style.display = 'none';
 });
 window.addEventListener('mouseup', () => {
