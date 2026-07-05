@@ -80,13 +80,16 @@ class CycleGroup:
     currencies: set[str]          # set of Payment Currency values
     is_cross_currency: bool       # True if > 1 currency (FX mismatch blindspot)
     raw_rows: list[dict] = field(default_factory=list, repr=False)
+    typology: str = "CYCLE"       # laundering typology label from the patterns file
 
     @property
     def account_set(self) -> frozenset[str]:
         return frozenset(self.accounts)
 
 
-def _build_group_from_rows(group_id: int, rows: list[dict]) -> Optional[CycleGroup]:
+def _build_group_from_rows(
+    group_id: int, rows: list[dict], typology: str = "CYCLE"
+) -> Optional[CycleGroup]:
     """Build a CycleGroup from a list of CSV row dicts for one pattern block."""
     if not rows:
         return None
@@ -134,6 +137,7 @@ def _build_group_from_rows(group_id: int, rows: list[dict]) -> Optional[CycleGro
         currencies=currencies,
         is_cross_currency=len(currencies) > 1,
         raw_rows=rows,
+        typology=typology,
     )
 
 
@@ -141,7 +145,10 @@ def _build_group_from_rows(group_id: int, rows: list[dict]) -> Optional[CycleGro
 # Strategy A: parse the structured patterns file
 # ---------------------------------------------------------------------------
 
-def _parse_patterns_file(patterns_path: Path) -> list[CycleGroup]:
+def _parse_patterns_file(
+    patterns_path: Path,
+    typologies: frozenset = frozenset({"CYCLE"}),
+) -> list[CycleGroup]:
     """
     Parse HI-Small_Patterns.txt.
 
@@ -150,27 +157,29 @@ def _parse_patterns_file(patterns_path: Path) -> list[CycleGroup]:
       <data rows — positional CSV, same column layout as HI-Small_Trans.csv>
       END LAUNDERING ATTEMPT - CYCLE
 
-    Other typologies (FAN-IN, FAN-OUT, BIPARTITE, etc.) are skipped and counted.
+    Only blocks whose typology is in `typologies` are collected; the rest are
+    counted and skipped. The default {"CYCLE"} preserves load_cycle_groups behavior.
     """
     groups: list[CycleGroup] = []
     typology_counts: dict[str, int] = {}
 
     group_id = 0
-    in_cycle = False
+    in_target = False
+    current_typology = "CYCLE"
     current_rows: list[dict] = []
 
     _BEGIN_RE = re.compile(r"^BEGIN LAUNDERING ATTEMPT - ([A-Z\-]+)", re.IGNORECASE)
     _END_RE   = re.compile(r"^END LAUNDERING ATTEMPT",                 re.IGNORECASE)
 
     def _flush():
-        nonlocal group_id, current_rows, in_cycle
-        if in_cycle and current_rows:
-            g = _build_group_from_rows(group_id, current_rows)
+        nonlocal group_id, current_rows, in_target
+        if in_target and current_rows:
+            g = _build_group_from_rows(group_id, current_rows, current_typology)
             if g:
                 groups.append(g)
                 group_id += 1
         current_rows = []
-        in_cycle = False
+        in_target = False
 
     with open(patterns_path, encoding="utf-8", errors="replace") as fh:
         for line in fh:
@@ -183,7 +192,8 @@ def _parse_patterns_file(patterns_path: Path) -> list[CycleGroup]:
                 _flush()
                 typology = begin_m.group(1).upper().rstrip(":")
                 typology_counts[typology] = typology_counts.get(typology, 0) + 1
-                in_cycle = (typology == "CYCLE")
+                in_target = typology in typologies
+                current_typology = typology
                 continue
 
             if _END_RE.match(stripped):
@@ -191,7 +201,7 @@ def _parse_patterns_file(patterns_path: Path) -> list[CycleGroup]:
                 continue
 
             # Data row — parse positionally (no header row in pattern blocks)
-            if in_cycle:
+            if in_target:
                 parts = [p.strip() for p in stripped.split(",")]
                 if len(parts) >= 9:  # need at least through Payment Currency
                     current_rows.append(_row_from_parts(parts))
@@ -199,8 +209,9 @@ def _parse_patterns_file(patterns_path: Path) -> list[CycleGroup]:
     _flush()
 
     logger.info(
-        "Patterns file parsed: %d CYCLE groups | all typologies: %s",
+        "Patterns file parsed: %d groups for %s | all typologies: %s",
         len(groups),
+        sorted(typologies),
         typology_counts,
     )
     return groups
@@ -351,3 +362,23 @@ def load_cycle_groups(
         "Download HI-Small_Patterns.txt and HI-Small_Trans.csv from Kaggle and "
         "place them in benchmarks/data/."
     )
+
+
+def load_pattern_groups(patterns_path, typologies) -> "list[CycleGroup]":
+    """
+    Load labeled laundering groups for any set of typologies.
+
+    Unlike load_cycle_groups there is no CSV-derived fallback: non-cycle
+    typologies have no structural signature we could derive from the
+    transactions file alone, so a missing/unparseable patterns file returns [].
+
+    Args:
+        patterns_path: HI-Small_Patterns.txt
+        typologies:    e.g. ["GATHER-SCATTER", "BIPARTITE"] (case-insensitive)
+    """
+    wanted = frozenset(t.strip().upper() for t in typologies)
+    path = Path(patterns_path)
+    if not path.exists():
+        logger.warning("Patterns file %s not found — no groups loaded", path)
+        return []
+    return _parse_patterns_file(path, wanted)
