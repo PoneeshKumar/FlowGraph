@@ -77,7 +77,19 @@ def _select_community_ids(session, args) -> list[str]:
 
 
 def _fetch(session, args):
-    """Return (nodes, links) dicts within the chosen scope, capped at max_nodes."""
+    """Return (nodes, links, communities_skipped) within the chosen scope.
+
+    Community membership is never truncated mid-way: a global LIMIT on the raw
+    node query can cut a community off partway through, and if the dropped
+    members happened to be the ones bridging two dense sub-groups, the community
+    renders as multiple disconnected blobs even though it's a single connected
+    piece in Neo4j (this is exactly the "why does one community look like two
+    clusters" symptom). Each selected community is fetched in full and included
+    wholly, or skipped entirely if it would breach --max-nodes. communities_skipped
+    is 0 for --prefix scope, which still uses a raw LIMIT (prefix queries are
+    user-controlled and typically small, e.g. a demo run).
+    """
+    skipped = 0
     if args.prefix:
         node_rows = session.run(
             "MATCH (a:Account) WHERE a.id STARTS WITH $p "
@@ -88,13 +100,19 @@ def _fetch(session, args):
     else:
         cids = _select_community_ids(session, args)
         if not cids:
-            return [], []
-        node_rows = session.run(
-            "MATCH (a:Account) WHERE a.community_id IN $cids "
-            "RETURN a.id AS id, a.community_id AS cid LIMIT $cap",
-            cids=cids, cap=args.max_nodes,
-        )
-        nodes = [{"id": r["id"], "cid": r["cid"]} for r in node_rows]
+            return [], [], 0
+        nodes = []
+        for cid in cids:
+            rows = session.run(
+                "MATCH (a:Account) WHERE a.community_id = $cid "
+                "RETURN a.id AS id, a.community_id AS cid",
+                cid=cid,
+            )
+            members = [{"id": r["id"], "cid": r["cid"]} for r in rows]
+            if len(nodes) + len(members) > args.max_nodes:
+                skipped += 1
+                continue  # this whole community would breach the cap — skip it, don't slice it
+            nodes.extend(members)
 
     ids = [n["id"] for n in nodes]
     id_set = set(ids)
@@ -109,7 +127,7 @@ def _fetch(session, args):
         for r in link_rows
         if r["s"] in id_set and r["t"] in id_set
     ]
-    return nodes, links
+    return nodes, links, skipped
 
 
 def _build_payload(nodes, links):
@@ -173,7 +191,7 @@ def main() -> None:
     driver = GraphDatabase.driver(NEO4J_URI, auth=(NEO4J_USER, NEO4J_PASSWORD))
     try:
         with driver.session(database=NEO4J_DATABASE) as session:
-            nodes, links = _fetch(session, args)
+            nodes, links, communities_skipped = _fetch(session, args)
     finally:
         driver.close()
 
@@ -193,7 +211,7 @@ def main() -> None:
             "nodeCount": len(out_nodes),
             "linkCount": len(out_links),
             "communityCount": len(communities),
-            "capped": len(out_nodes) >= args.max_nodes,
+            "communitiesSkipped": communities_skipped,
             "maxNodes": args.max_nodes,
         },
     }
@@ -206,7 +224,8 @@ def main() -> None:
     print(f"Wrote {out_path}")
     print(f"  {m['nodeCount']} nodes · {m['linkCount']} edges · "
           f"{m['communityCount']} communities"
-          + ("  (node cap hit — narrow the scope to see more per community)" if m["capped"] else ""))
+          + (f"  ({m['communitiesSkipped']} whole communities skipped — "
+             f"raise --max-nodes to include them)" if m["communitiesSkipped"] else ""))
     if args.open:
         webbrowser.open(out_path.as_uri())
     else:
@@ -522,9 +541,12 @@ document.getElementById('s-nodes').textContent = DATA.meta.nodeCount;
 document.getElementById('s-links').textContent = DATA.meta.linkCount;
 document.getElementById('s-comms').textContent = DATA.meta.communityCount;
 document.getElementById('s-gen').textContent = 'as of ' + DATA.meta.generated;
-if (DATA.meta.capped)
+if (DATA.meta.communitiesSkipped > 0)
   document.getElementById('s-cap').innerHTML =
-    `<span style="color:#fbbf24">node cap (${DATA.meta.maxNodes}) reached — narrow the scope for full communities</span>`;
+    `<span style="color:#fbbf24">${DATA.meta.communitiesSkipped} whole ` +
+    `communit${DATA.meta.communitiesSkipped === 1 ? 'y' : 'ies'} skipped ` +
+    `(--max-nodes=${DATA.meta.maxNodes}) — every community shown is complete, ` +
+    `never truncated</span>`;
 
 const rows = document.getElementById('legend-rows');
 DATA.communities.forEach(c => {
