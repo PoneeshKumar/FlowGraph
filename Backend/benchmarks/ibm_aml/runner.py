@@ -59,14 +59,14 @@ from __future__ import annotations
 
 import argparse
 import asyncio
-import json
 import logging
-import os
 import sys
 import time
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
+
+import pandas as pd
 
 # Ensure Backend/ is on sys.path when run as __main__
 _BACKEND = Path(__file__).parent.parent.parent
@@ -74,7 +74,7 @@ if str(_BACKEND) not in sys.path:
     sys.path.insert(0, str(_BACKEND))
 
 from benchmarks.ibm_aml.ingestor import ingest, IngestStats
-from benchmarks.ibm_aml.patterns import load_cycle_groups, CycleGroup
+from benchmarks.ibm_aml.patterns import load_cycle_groups, CycleGroup, _parse_ts, _TS_FORMATS
 from benchmarks.ibm_aml.blindspots import analyze_misses, BlindspotReport
 from config import CYCLE_WINDOW_HOURS
 from db.neo4j import Neo4jClient
@@ -131,19 +131,27 @@ async def run_benchmark(
     # The IBM AML data is from September 2022; using datetime.now() would place
     # every edge outside any lookback window. We scan the full CSV for the max
     # timestamp so the window covers the entire dataset, not just the cycle groups.
-    import csv as _csv
-    from benchmarks.ibm_aml.patterns import _parse_ts, _row_from_parts
-    from datetime import timedelta
-
     logger.info("Scanning CSV for max timestamp to anchor detection window …")
-    dataset_reference_time: datetime | None = None
-    with open(csv_path, newline="", encoding="utf-8") as _fh:
-        _reader = _csv.reader(_fh)
-        next(_reader, None)
-        for _parts in _reader:
-            _ts = _parse_ts(_parts[0]) if _parts else None
-            if _ts and (dataset_reference_time is None or _ts > dataset_reference_time):
-                dataset_reference_time = _ts
+    # Only the first column is needed — read positionally (usecols=[0]) so the
+    # duplicate "Account" header downstream never comes into play. Vectorized
+    # pd.to_datetime against the dataset's primary format is far faster than a
+    # per-row csv.reader loop over a multi-million-row file.
+    ts_column = pd.read_csv(
+        csv_path, usecols=[0], header=0, names=["Timestamp"]
+    )["Timestamp"]
+    parsed = pd.to_datetime(ts_column, format=_TS_FORMATS[0], errors="coerce", utc=True)
+
+    # Fall back to the multi-format parser for any rows the primary format
+    # didn't match — rare, kept only for robustness against format drift.
+    unparsed = parsed.isna()
+    if unparsed.any():
+        parsed.loc[unparsed] = pd.to_datetime(
+            ts_column[unparsed].map(_parse_ts), utc=True
+        )
+
+    dataset_reference_time: datetime | None = (
+        parsed.max().to_pydatetime() if parsed.notna().any() else None
+    )
 
     if dataset_reference_time:
         dataset_reference_time = dataset_reference_time + timedelta(hours=1)

@@ -16,15 +16,14 @@ Usage:
 
 from __future__ import annotations
 
-import asyncio
 import csv
 import hashlib
 import logging
-import random
 from dataclasses import dataclass
-from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Optional
+
+import numpy as np
 
 from benchmarks.ibm_aml.patterns import CycleGroup, _account_key, _parse_ts, _row_from_parts
 
@@ -35,6 +34,16 @@ MAX_BACKGROUND_ROWS = 200_000
 
 # Log progress every N rows
 LOG_EVERY = 5_000
+
+
+def _sample_without_replacement(
+    rng: "np.random.Generator", population: list[dict], k: int
+) -> list[dict]:
+    """Sample k items from population without replacement, via index choice
+    (numpy's Generator.choice only samples 1-D arrays of scalars directly,
+    not a list of dicts)."""
+    idx = rng.choice(len(population), size=k, replace=False)
+    return [population[i] for i in idx]
 
 
 @dataclass
@@ -166,7 +175,7 @@ async def ingest(
         IngestStats
     """
     csv_path = Path(csv_path)
-    rng = random.Random(seed)
+    rng = np.random.default_rng(seed)
     stats = IngestStats()
 
     # Build the set of account keys that appear in any cycle group
@@ -208,8 +217,9 @@ async def ingest(
                 background_candidates.append(transfer)
                 if len(background_candidates) > MAX_BACKGROUND_ROWS * 3:
                     # Trim to avoid unbounded memory: keep a rolling sample
-                    keep = rng.sample(background_candidates, MAX_BACKGROUND_ROWS)
-                    background_candidates = keep
+                    background_candidates = _sample_without_replacement(
+                        rng, background_candidates, MAX_BACKGROUND_ROWS
+                    )
 
             if (i + 1) % LOG_EVERY == 0:
                 logger.info(
@@ -237,8 +247,8 @@ async def ingest(
         MAX_BACKGROUND_ROWS,
     )
     if bg_target > 0 and background_candidates:
-        bg_sample = rng.sample(
-            background_candidates, min(bg_target, len(background_candidates))
+        bg_sample = _sample_without_replacement(
+            rng, background_candidates, min(bg_target, len(background_candidates))
         )
         logger.info("Writing %d background transactions to Neo4j …", len(bg_sample))
         batch = []

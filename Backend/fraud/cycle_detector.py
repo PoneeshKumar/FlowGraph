@@ -21,20 +21,16 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
-import json
 import logging
-import math
+import pathlib
 import sys
 from datetime import datetime, timezone, timedelta
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List
+
+import numpy as np
 
 from config import (
-    CYCLE_MAX_DEPTH,
-    CYCLE_WINDOW_HOURS,
-    CYCLE_MAX_HOP_GAP_HOURS,
-    CYCLE_MAX_LEAK,
     CYCLE_MIN_VALUE_CENTS,
-    CYCLE_MAX_RESULTS,
     CYCLE_FAST_CLOSE_HOURS,
     CYCLE_LEVEL_MEDIUM,
     CYCLE_LEVEL_HIGH,
@@ -86,31 +82,30 @@ def score_cycle(
         )
 
     n_hops = len(amounts)
-    total_cents = sum(amounts)
-    min_hop_cents = min(amounts)
-    mean_cents = total_cents / n_hops
+    amounts_arr = np.asarray(amounts, dtype=np.float64)
+    timestamps_arr = np.asarray(timestamps, dtype=np.float64)
 
-    # Span of the loop in seconds. Deliberately plain min/max, not numpy: a
-    # cycle is at most CYCLE_MAX_DEPTH (6) hops, so a handful of Python ints
-    # beats the array-conversion overhead, and it keeps span_seconds a plain
-    # int — numpy scalars aren't JSON-serializable, and this value flows into
-    # `details`, which gets json.dumps'd by postgres.upsert_risk_flag.
-    span_seconds = max(timestamps) - min(timestamps)
+    total_cents = int(amounts_arr.sum())
+    min_hop_cents = int(amounts_arr.min())
+    mean_cents = float(amounts_arr.mean())
+
+    # Span of the loop in seconds. np.ptp (peak-to-peak = max - min) replaces
+    # the separate max(...)/min(...) calls; cast back to plain int since this
+    # flows into `details`, which gets json.dumps'd by postgres.upsert_risk_flag
+    # (a numpy scalar there would fail to serialize).
+    span_seconds = int(np.ptp(timestamps_arr))
     span_hours = span_seconds / 3600.0
 
     # --- 1. Value score (0.0–1.0) ---
-    # Scale: $1k (floor) → 0.0, $1M+ → 1.0 (log scale)
-    # Plain stdlib math.log, not numpy: `np.math` was just a re-export of this
-    # same stdlib module (removed in numpy >= 1.25), so it isn't a distinct,
-    # faster implementation — and pulling in numpy for one scalar log() call
-    # only adds a dependency, not speed.
+    # Scale: $1k (floor) → 0.0, $1M+ → 1.0 (log scale). np.log1p(x) replaces
+    # the manual log(x + 1) — same formula, dedicated stdlib/numpy function.
     _min_cents = max(CYCLE_MIN_VALUE_CENTS, 1)
     _max_cents = 100_000_000  # $1M cap for normalization
-    value_score = min(
+    value_score = float(min(
         1.0,
-        math.log(max(min_hop_cents, _min_cents) / _min_cents + 1)
-        / math.log(_max_cents / _min_cents + 1),
-    )
+        np.log1p(max(min_hop_cents, _min_cents) / _min_cents)
+        / np.log1p(_max_cents / _min_cents),
+    ))
 
     # --- 2. Velocity score (0.0–1.0, higher = faster = more suspicious) ---
     fast_close_seconds = fast_close_hours * 3600
@@ -124,8 +119,8 @@ def score_cycle(
     if n_hops == 1 or mean_cents == 0:
         consistency_score = 1.0
     else:
-        variance = sum((a - mean_cents) ** 2 for a in amounts) / n_hops
-        cv = math.sqrt(variance) / mean_cents  # coefficient of variation
+        # np.std (population std, ddof=0) replaces the manual variance loop.
+        cv = float(amounts_arr.std() / mean_cents)  # coefficient of variation
         # CV of 0 → score 1.0; CV of 1.0 (high spread) → score 0.0
         consistency_score = max(0.0, 1.0 - cv)
 
@@ -362,8 +357,7 @@ async def _run_demo() -> None:
     Usage:
         python -m fraud.cycle_detector
     """
-    import sys
-    sys.path.insert(0, str(__import__("pathlib").Path(__file__).parent.parent))
+    sys.path.insert(0, str(pathlib.Path(__file__).parent.parent))
 
     from db.neo4j import Neo4jClient
     from db.postgres import PostgresClient
@@ -378,7 +372,6 @@ async def _run_demo() -> None:
     await neo4j_client.init_constraints()
 
     # Run the migration so risk_flags table exists
-    import pathlib
     migration_sql = (
         pathlib.Path(__file__).parent.parent
         / "migrations"
