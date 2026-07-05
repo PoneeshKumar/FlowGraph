@@ -31,6 +31,8 @@ from datetime import datetime, timezone
 from typing import Any, Dict, Iterable, List, Optional, Set
 
 import networkx as nx
+import numpy as np
+import pandas as pd
 
 from config import (
     LOUVAIN_WINDOW_DAYS,
@@ -79,6 +81,23 @@ def edge_weight(
     raise ValueError(f"unknown LOUVAIN_WEIGHT_MODE: {mode!r}")
 
 
+def _edge_weight_vectorized(
+    total_amount_cents: pd.Series,
+    tx_count: pd.Series,
+    mode: str = LOUVAIN_WEIGHT_MODE,
+) -> pd.Series:
+    """Vectorized form of edge_weight — same semantics, applied column-wise."""
+    if mode == "log_amount":
+        return np.log1p(total_amount_cents.clip(lower=0))
+    if mode == "amount":
+        return total_amount_cents.clip(lower=0).astype(float)
+    if mode == "tx_count":
+        return tx_count.clip(lower=0).astype(float)
+    if mode == "unweighted":
+        return pd.Series(1.0, index=total_amount_cents.index)
+    raise ValueError(f"unknown LOUVAIN_WEIGHT_MODE: {mode!r}")
+
+
 def build_undirected_graph(
     edges: List[Dict[str, Any]],
     weight_mode: str = LOUVAIN_WEIGHT_MODE,
@@ -93,6 +112,10 @@ def build_undirected_graph(
     Self-loops are dropped: an account transferring to itself carries no
     community signal and networkx modularity treats loops inconsistently.
 
+    The directed→undirected merge is a groupby-sum over a pandas DataFrame
+    rather than a per-edge Python dict accumulator — same result, vectorized
+    over the full edge list instead of one Python-level op per record.
+
     Args:
         edges: dicts of {src, dst, total_amount, tx_count} from
                Neo4jClient.export_flows_to_edges
@@ -102,23 +125,35 @@ def build_undirected_graph(
         nx.Graph with edge attributes: weight (float), total_amount (int), tx_count (int)
     """
     graph = nx.Graph()
-    for e in edges:
-        src, dst = e["src"], e["dst"]
-        if src == dst:
-            continue
-        w = edge_weight(e["total_amount"], e["tx_count"], weight_mode)
-        if graph.has_edge(src, dst):
-            attrs = graph[src][dst]
-            attrs["weight"] += w
-            attrs["total_amount"] += e["total_amount"]
-            attrs["tx_count"] += e["tx_count"]
-        else:
-            graph.add_edge(
-                src, dst,
-                weight=w,
-                total_amount=e["total_amount"],
-                tx_count=e["tx_count"],
-            )
+    if not edges:
+        return graph
+
+    df = pd.DataFrame(edges, columns=["src", "dst", "total_amount", "tx_count"])
+    df = df[df["src"] != df["dst"]]
+    if df.empty:
+        return graph
+
+    df["weight"] = _edge_weight_vectorized(df["total_amount"], df["tx_count"], weight_mode)
+
+    # Canonical unordered pair so A→B and B→A land in the same group.
+    node_a = df[["src", "dst"]].min(axis=1)
+    node_b = df[["src", "dst"]].max(axis=1)
+    df = df.assign(node_a=node_a, node_b=node_b)
+
+    agg = df.groupby(["node_a", "node_b"], sort=False, as_index=False).agg(
+        weight=("weight", "sum"),
+        total_amount=("total_amount", "sum"),
+        tx_count=("tx_count", "sum"),
+    )
+
+    graph.add_edges_from(
+        (row.node_a, row.node_b, {
+            "weight": row.weight,
+            "total_amount": int(row.total_amount),
+            "tx_count": int(row.tx_count),
+        })
+        for row in agg.itertuples(index=False)
+    )
     return graph
 
 
