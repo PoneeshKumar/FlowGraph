@@ -23,7 +23,6 @@ import asyncio
 import hashlib
 import logging
 import pathlib
-import sys
 from datetime import datetime, timezone, timedelta
 from typing import Any, Dict, List
 
@@ -36,6 +35,8 @@ from config import (
     CYCLE_LEVEL_HIGH,
     CYCLE_LEVEL_CRITICAL,
 )
+from db.neo4j import Neo4jClient
+from db.postgres import PostgresClient
 
 logger = logging.getLogger(__name__)
 
@@ -357,11 +358,6 @@ async def _run_demo() -> None:
     Usage:
         python -m fraud.cycle_detector
     """
-    sys.path.insert(0, str(pathlib.Path(__file__).parent.parent))
-
-    from db.neo4j import Neo4jClient
-    from db.postgres import PostgresClient
-
     logging.basicConfig(level=logging.INFO)
 
     neo4j_client = Neo4jClient()
