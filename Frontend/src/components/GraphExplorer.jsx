@@ -117,6 +117,15 @@ function GraphNode({ node, isSelected, onSelect, delay }) {
       {/* Center dot */}
       <circle r={r * 0.32} fill={color} opacity={0.75}/>
 
+      {node.pagerank !== undefined && (
+        <g>
+          <rect x={r + 4} y={-8} width="54" height="16" rx="8" fill="var(--bg-card)" stroke={color} strokeWidth="1" />
+          <text x={r + 31} y={3} textAnchor="middle" fontSize="7" fontFamily="Space Mono, monospace" fontWeight="700" fill={color}>
+            PR {node.pagerank.toFixed(3)}
+          </text>
+        </g>
+      )}
+
       {/* Label */}
       <text
         y={r + 12}
