@@ -263,6 +263,126 @@ class PostgresClient:
             rows = await conn.fetch(query)
             return {row["status"]: dict(row) for row in rows}
 
+    # ==================== RISK FLAGS ====================
+
+    async def upsert_risk_flag(
+        self,
+        flag_type: str,
+        fingerprint: str,
+        account_ids: List[str],
+        risk_level: str,
+        risk_score: float,
+        explanation: str,
+        details: Optional[Dict[str, Any]] = None,
+    ) -> None:
+        """
+        Persist a fraud detection result, idempotent on fingerprint.
+
+        A fingerprint uniquely identifies a logical flag (e.g. the canonical
+        form of a cycle ring). On conflict the existing row is updated:
+        detection_count increments, last_detected_at refreshes, and the
+        current risk assessment (level / score / explanation) overwrites the
+        old one — so a re-detected flag always reflects the latest evaluation.
+
+        explanation must never be None: it is a regulatory requirement that
+        every flag carries a human-readable reason (CLAUDE.md convention).
+
+        Args:
+            flag_type:    Detector type ('CYCLE', 'STRUCTURING', 'CTR', …)
+            fingerprint:  Stable unique key for this logical flag (sha256 hex)
+            account_ids:  List of account IDs involved
+            risk_level:   'low' | 'medium' | 'high' | 'critical'
+            risk_score:   Numeric score (0.0–1.0)
+            explanation:  Natural-language reason (required)
+            details:      Raw detector output (amounts, timestamps, hop count, …)
+        """
+        if not explanation:
+            raise ValueError("explanation must not be empty — regulatory requirement")
+
+        query = """
+        INSERT INTO risk_flags (
+            flag_type, fingerprint, account_ids, risk_level, risk_score,
+            explanation, details, status, first_detected_at, last_detected_at,
+            detection_count, created_at
+        ) VALUES (
+            $1, $2, $3, $4, $5, $6, $7::jsonb, 'open', NOW(), NOW(), 1, NOW()
+        )
+        ON CONFLICT (fingerprint) DO UPDATE SET
+            last_detected_at = NOW(),
+            detection_count  = risk_flags.detection_count + 1,
+            risk_level       = EXCLUDED.risk_level,
+            risk_score       = EXCLUDED.risk_score,
+            explanation      = EXCLUDED.explanation,
+            details          = EXCLUDED.details
+        """
+
+        async with self._get_connection() as conn:
+            await conn.execute(
+                query,
+                flag_type,
+                fingerprint,
+                account_ids,
+                risk_level,
+                risk_score,
+                explanation,
+                json.dumps(details) if details else None,
+            )
+
+    async def get_risk_flags(
+        self,
+        flag_type: Optional[str] = None,
+        min_level: Optional[str] = None,
+        status: Optional[str] = None,
+        limit: int = 100,
+    ) -> List[Dict[str, Any]]:
+        """
+        Query risk flags, optionally filtered by type, minimum level, or status.
+
+        Risk levels ordered: low < medium < high < critical.
+
+        Args:
+            flag_type: Filter to a specific detector ('CYCLE', 'STRUCTURING', …)
+            min_level: Return only flags at or above this level ('medium' → medium/high/critical)
+            status:    Filter by status ('open', 'reviewed', 'dismissed', 'escalated')
+            limit:     Max rows to return
+
+        Returns:
+            List of flag dicts ordered by last_detected_at DESC
+        """
+        _level_order = {"low": 1, "medium": 2, "high": 3, "critical": 4}
+        min_level_int = _level_order.get(min_level or "low", 1)
+
+        conditions = [
+            "CASE risk_level "
+            "WHEN 'low' THEN 1 WHEN 'medium' THEN 2 "
+            "WHEN 'high' THEN 3 WHEN 'critical' THEN 4 ELSE 0 END >= $1"
+        ]
+        params: List[Any] = [min_level_int]
+
+        if flag_type:
+            params.append(flag_type)
+            conditions.append(f"flag_type = ${len(params)}")
+
+        if status:
+            params.append(status)
+            conditions.append(f"status = ${len(params)}")
+
+        params.append(limit)
+        where = " AND ".join(conditions)
+        query = f"""
+        SELECT id, flag_type, fingerprint, account_ids, risk_level, risk_score,
+               explanation, details, status, first_detected_at, last_detected_at,
+               detection_count, created_at
+        FROM risk_flags
+        WHERE {where}
+        ORDER BY last_detected_at DESC
+        LIMIT ${len(params)}
+        """
+
+        async with self._get_connection() as conn:
+            rows = await conn.fetch(query, *params)
+            return [dict(row) for row in rows]
+
     async def health_check(self) -> bool:
         """Test database connection."""
         try:
