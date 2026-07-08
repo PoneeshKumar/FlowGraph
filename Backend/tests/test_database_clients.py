@@ -8,6 +8,10 @@ from unittest.mock import AsyncMock, MagicMock, patch
 from uuid import uuid4
 import json
 
+from db.neo4j import Neo4jClient
+
+pytestmark = pytest.mark.anyio
+
 
 class TestPostgresClient:
     """Tests for PostgreSQL client."""
@@ -135,6 +139,15 @@ class TestNeo4jClient:
         )
         
         mock_neo4j_client.create_account_node.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_compute_local_pagerank_without_driver(self):
+        """Test PageRank computation returns empty without an initialized driver."""
+        client = Neo4jClient()
+
+        result = await client.compute_local_pagerank(["account_123", "account_456"])
+
+        assert result == {}
 
     @pytest.mark.asyncio
     async def test_get_subgraph(self, mock_neo4j_client):
