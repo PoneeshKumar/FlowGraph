@@ -60,7 +60,8 @@ class FlowGraphBackend:
             
             self.neo4j_client = Neo4jClient()
             await self.neo4j_client.initialize()
-            
+            await self.neo4j_client.init_constraints()   # Account + TRANSFER uniqueness
+
             self.redis_client = RedisClient()
             await self.redis_client.initialize()
 

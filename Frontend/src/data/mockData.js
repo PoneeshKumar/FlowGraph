@@ -88,6 +88,17 @@ export const RECENT_ALERTS = [
     confidence: 71,
     aiExplanation: 'Louvain community detection placed EXC-9017 in the same cluster as 3 accounts with existing fraud flags. Elevated risk by association.',
   },
+  {
+    id: 'ALT-006',
+    severity: 'medium',
+    type: 'Dormant Account Reactivation',
+    message: 'ACC-1129 moved $42K after 14 months idle',
+    account: 'ACC-1129',
+    amount: 42000,
+    timestamp: '1 hr ago',
+    confidence: 68,
+    aiExplanation: 'Account dormant since Feb 2025 suddenly initiated a card-funded transfer to a merchant with prior fraud associations.',
+  },
 ]
 
 export const RECENT_TRANSACTIONS = [
@@ -108,6 +119,34 @@ export const METRICS = {
   activeAccounts:{ value: 1847,     delta: +3.1  },
   cyclesDetected:{ value: 3,        delta: +200  },
   riskAlerts:    { value: 17,       delta: +42.9 },
+}
+
+/** Cumulative network volume over time — powers the overview hero chart. */
+export const VOLUME_SERIES = {
+  '24h': {
+    labels: ['12a', '2a', '4a', '6a', '8a', '10a', '12p', '2p', '4p', '6p', '8p', 'Now'],
+    volume: [4.1, 4.3, 4.2, 4.8, 5.6, 6.2, 6.8, 7.1, 7.4, 7.9, 8.1, 8.42],
+    baseline: [3.9, 4.0, 4.0, 4.2, 4.5, 4.8, 5.1, 5.4, 5.7, 6.0, 6.3, 6.5],
+    txns: [43200, 44800, 44100, 50200, 58200, 64800, 71200, 74300, 77500, 82400, 84600, 89154],
+  },
+  '7d': {
+    labels: ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Today'],
+    volume: [6.2, 6.8, 7.1, 7.4, 7.9, 8.0, 8.42],
+    baseline: [5.8, 6.0, 6.2, 6.4, 6.6, 6.7, 6.8],
+    txns: [65400, 71200, 74800, 78200, 83400, 84600, 89154],
+  },
+  '30d': {
+    labels: ['W1', 'W2', 'W3', 'W4', 'Today'],
+    volume: [5.4, 6.1, 6.9, 7.6, 8.42],
+    baseline: [5.2, 5.5, 5.8, 6.1, 6.4],
+    txns: [56800, 64400, 72800, 80200, 89154],
+  },
+  '90d': {
+    labels: ['Jan', 'Feb', 'Mar', 'Today'],
+    volume: [4.8, 6.2, 7.5, 8.42],
+    baseline: [4.5, 5.0, 5.6, 6.2],
+    txns: [50600, 65200, 79200, 89154],
+  },
 }
 
 // ── In-Flight: ACH Batches ──────────────────────────────────────────────────

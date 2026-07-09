@@ -166,12 +166,37 @@ class TestNeo4jClient:
 
     @pytest.mark.asyncio
     async def test_find_cycles(self, mock_neo4j_client):
-        """Test finding cycles in graph."""
+        """find_cycles returns a list of {node_ids, amounts, timestamps, txn_ids} dicts."""
         mock_neo4j_client.find_cycles.return_value = []
-        
-        cycles = await mock_neo4j_client.find_cycles("account_123", max_depth=6)
-        
+
+        # New signature: keyword args for all detection parameters
+        cycles = await mock_neo4j_client.find_cycles(
+            "account_123",
+            max_depth=6,
+            window_hours=48,
+        )
+
         assert isinstance(cycles, list)
+
+    @pytest.mark.asyncio
+    async def test_find_cycles_result_shape(self, mock_neo4j_client):
+        """Non-empty result contains the expected keys."""
+        from datetime import datetime, timezone
+        now = int(datetime.now(timezone.utc).timestamp())
+        mock_neo4j_client.find_cycles.return_value = [
+            {
+                "node_ids":   ["A", "B", "C", "A"],
+                "amounts":    [5_000_000, 4_750_000, 4_500_000],
+                "timestamps": [now, now + 3600, now + 7200],
+                "txn_ids":    ["txn-1", "txn-2", "txn-3"],
+            }
+        ]
+
+        result = await mock_neo4j_client.find_cycles("A")
+        assert len(result) == 1
+        cycle = result[0]
+        for key in ("node_ids", "amounts", "timestamps", "txn_ids"):
+            assert key in cycle, f"Missing key in cycle result: {key}"
 
     @pytest.mark.asyncio
     async def test_shortest_path(self, mock_neo4j_client):

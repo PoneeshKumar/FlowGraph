@@ -56,6 +56,10 @@ class BasePaymentEvent(BaseModel):
     amount_cents: int=Field(..., gt=0)
     currency: str=Field(default="CAD", min_length=3, max_length=3)
 
+    # canonical USD value in minor units (cents) for cross-rail, cross-currency
+    # aggregation in the graph + cache. Populated at normalization time.
+    amount_usd_cents: int=Field(..., gt=0)
+
     # always have UTC time for timestamps
     timestamp_utc: datetime
 
@@ -64,13 +68,15 @@ class BasePaymentEvent(BaseModel):
 
     @field_validator("timestamp_utc", mode="before")
     @classmethod
-    def enforcu_utc(cls, v: Any) -> datetime:
-        # only have UTC no native times
+    def enforce_utc(cls, v: Any) -> datetime:
+        # naive datetimes are rejected; tz-aware non-UTC is converted to UTC
+        # so every stored timestamp and Redis score is in a single timezone
         if isinstance(v, datetime):
             if v.tzinfo is None:
                 raise ValueError(
                     "timestamp_utc must be timezone-aware (UTC)."
                 )
+            return v.astimezone(timezone.utc)
         return v
 
     @field_validator("currency")
@@ -147,9 +153,11 @@ class CardSettlementEvent(BasePaymentEvent):
 
     @field_validator("settled_at_utc", mode="before")
     @classmethod
-    def enforcu_utc(cls, v: Any) -> datetime:
-        if isinstance(v, datetime) and v.tzinfo is None:
-            raise ValueError("settled at utc must be timezone aware (UTC)")
+    def enforce_settled_utc(cls, v: Any) -> datetime:
+        if isinstance(v, datetime):
+            if v.tzinfo is None:
+                raise ValueError("settled_at_utc must be timezone-aware (UTC).")
+            return v.astimezone(timezone.utc)
         return v
 
     

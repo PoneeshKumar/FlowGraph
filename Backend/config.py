@@ -28,7 +28,7 @@ POSTGRES_POOL_TIMEOUT = int(os.getenv("POSTGRES_POOL_TIMEOUT", "30"))
 # Neo4j (property graph: accounts, merchants, edges, centrality)
 NEO4J_URI = os.getenv("NEO4J_URI", "neo4j://localhost:7687")
 NEO4J_USER = os.getenv("NEO4J_USER", "neo4j")
-NEO4J_PASSWORD = os.getenv("NEO4J_PASSWORD", "password")
+NEO4J_PASSWORD = os.getenv("NEO4J_PASSWORD", "changeme")
 NEO4J_DATABASE = os.getenv("NEO4J_DATABASE", "neo4j")
 
 # Redis (time-windowed edge weights, caching)
@@ -58,3 +58,58 @@ METRICS_REPORT_INTERVAL_SECONDS = int(os.getenv("METRICS_REPORT_INTERVAL_SECONDS
 
 # ==================== LOGGING ====================
 LOG_LEVEL = os.getenv("LOG_LEVEL", "INFO")
+
+# ==================== FRAUD DETECTION ====================
+# Cycle detection — transaction-level DFS over TRANSFER edges.
+# All values are tunable via env vars; defaults reflect CLAUDE.md spec.
+
+CYCLE_MAX_DEPTH = int(os.getenv("CYCLE_MAX_DEPTH", "6"))
+# Max hops in a cycle (6 = safe Neo4j traversal limit; increase cautiously)
+
+CYCLE_WINDOW_HOURS = int(os.getenv("CYCLE_WINDOW_HOURS", "48"))
+# Look-back window: only consider TRANSFER edges within this many hours
+
+CYCLE_MAX_HOP_GAP_HOURS = float(os.getenv("CYCLE_MAX_HOP_GAP_HOURS", "72.0"))
+# Max hours allowed between consecutive hops (72h = 3 days; real layering
+# schemes often spread hops over days to avoid detection)
+
+CYCLE_MAX_LEAK = float(os.getenv("CYCLE_MAX_LEAK", "0.20"))
+# Max fractional value bleed-off per hop (0.20 = up to 20% fees/cuts allowed)
+
+CYCLE_CONSERVATION_MODE = os.getenv("CYCLE_CONSERVATION_MODE", "hop").lower()
+# How to enforce amount conservation on aggregate FLOWS_TO cycles:
+#   "hop"   — per-hop range-overlap, skipping cross-currency hops. Best F1 on IBM AML
+#             (100% precision, 68.5% recall): correctly rejects coincidental rings that
+#             "off" lets through, and skip-cross-currency avoids FX numeric mismatch.
+#             Default.
+#   "cycle" — whole-ring magnitude consistency (weakest hop >= strongest × (1-max_cycle_leak)).
+#             Worse on multi-currency data: raw-cent magnitudes differ across currencies
+#             (Yuan cents ~7x USD cents for equal value), so FX trips the whole-ring check.
+#   "off"   — topology + temporal + value floor only. Highest raw recall (70.4%) but
+#             precision drops to 84% (coincidental rings). Use when the other detectors
+#             (PageRank hubs, Louvain communities) own precision.
+
+CYCLE_MAX_CYCLE_LEAK = float(os.getenv("CYCLE_MAX_CYCLE_LEAK", "0.60"))
+# For conservation_mode="cycle": max total magnitude spread across the whole ring.
+# 0.60 = weakest hop may be down to 40% of the strongest (accumulated fees/splits
+# around a multi-hop loop) and still count as one conserved flow.
+
+CYCLE_MIN_VALUE_CENTS = int(os.getenv("CYCLE_MIN_VALUE_CENTS", "10000"))
+# Minimum weakest-hop amount to flag ($100 — filters trivial test noise while
+# catching structuring below $1k thresholds)
+
+CYCLE_MAX_RESULTS = int(os.getenv("CYCLE_MAX_RESULTS", "20"))
+# Cap on cycles returned per account per detection run
+
+CYCLE_QUERY_TIMEOUT_SECONDS = float(os.getenv("CYCLE_QUERY_TIMEOUT_SECONDS", "10.0"))
+# Per-account cycle query transaction timeout. A fraud query must never hang the
+# pipeline; a timed-out search returns no cycle (correct for a miss) and bounds latency.
+# Raise for deep batch sweeps (depth 12), keep low (5-10s) for real-time streaming.
+
+CYCLE_FAST_CLOSE_HOURS = float(os.getenv("CYCLE_FAST_CLOSE_HOURS", "24.0"))
+# Velocity scoring knee: loops closing faster than this score higher for velocity
+
+# Score thresholds → risk level (lower-bound, inclusive)
+CYCLE_LEVEL_MEDIUM = float(os.getenv("CYCLE_LEVEL_MEDIUM", "0.40"))
+CYCLE_LEVEL_HIGH = float(os.getenv("CYCLE_LEVEL_HIGH", "0.65"))
+CYCLE_LEVEL_CRITICAL = float(os.getenv("CYCLE_LEVEL_CRITICAL", "0.85"))

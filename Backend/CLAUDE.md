@@ -1,59 +1,92 @@
-# CLAUDE.md
+# FlowGraph
 
-This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
-
-## Project Overview
-
-FlowGraph Backend is a Python payment event processing pipeline. It ingests card payment events (auth + settlement), normalizes them, stores them across Neo4j/Redis/PostgreSQL, and streams them via Faust (Kafka).
+Real-time money flow intelligence engine. Every payment is a directed edge in a live graph. The system detects fraud patterns — circular flows, hub-and-spoke networks, layering — that are invisible to row-based systems.
 
 ## Architecture
 
+Five layers, top to bottom:
+
 ```
-consumer/faust_app.py     # Faust Kafka consumer — ingests raw events
-normalizer/card_normalizer.py  # Normalizes raw payloads into typed models
-models/card_events.py     # Pydantic event models (source of truth for schema)
-generator/card_generator.py    # Generates synthetic card events for testing
-db/neo4j.py               # Neo4j client (graph relationships)
-db/redis.py               # Redis client (auth lookup cache)
-db/postgres.py            # PostgreSQL client (persistent storage)
-config.py                 # Environment/connection config
-main.py                   # Entry point
+Payment events → Kafka → Python consumer (Faust)
+                              ↓            ↓            ↓
+                          Postgres      Neo4j        Redis
+                         (outbox)      (graph)      (ZSET)
+                                          ↓
+                              Cycle detection (DFS)
+                              Incremental PageRank
+                              Louvain clustering (daily batch)
+                                          ↓
+                              Risk flag aggregator
+                                          ↓
+                              Claude API (subgraph summary → risk classification)
+                                          ↓
+                              FastAPI (Cypher-over-HTTP)
+                              D3 / Cytoscape.js (force-directed graph UI)
 ```
 
-## Domain Model
+## Current status
 
-### Rails
-`Rail` enum: `ACH`, `WIRE`, `CARD`, `CRYPTO` — only CARD is implemented so far.
+**Done and verified:**
+- Kafka ingestion
+- Python consumer (Faust)
 
-### Event Types & Status lifecycle
-- `CardAuthEvent` (tap/swipe) → status auto-set in `__init__`: `PENDING` if approved, `DECLINED` if not
-- `CardSettlementEvent` (money moves, 1–3 days later) → defaults to `SETTLED`
-- `ORPHANED` = settlement arrived with no matching auth
+**In progress:**
+- Storage layer (Postgres + Neo4j + Redis dual-write)
 
-Auth and settlement are linked by `authorization_code` (6-char uppercase string).
+**Not started:**
+- Graph algorithm engine
+- AI enrichment layer
+- Query API
+- Frontend
 
-### Key invariants
-- **Amounts in cents** (`amount_cents: int`) — never floats. Use `amount_dollars` property for display only.
-- **All timestamps must be UTC and timezone-aware** — validators raise on naive datetimes.
-- **Currency codes are 3-char uppercase ISO** — auto-uppercased by validator.
-- **Authorization codes are 6-char uppercase** — auto-uppercased by validator.
-- **Merchant category codes are exactly 4 digits** — validated to be all digits.
-- **PANs are SHA-256 hashed** via `hash_pan()` before storage — never store raw card numbers.
-- `raw_payload: dict` on `BasePaymentEvent` preserves the original untouched payload.
-- `Config.use_enum_values = False` — pass enum instances, not string values.
+## Stack
 
-## Code Conventions
+| Component | Technology |
+|---|---|
+| Message queue | Kafka |
+| Stream processing | Python / Faust |
+| Graph database | Neo4j |
+| Relational store | Postgres |
+| Cache / time-series | Redis |
+| API | FastAPI |
+| Frontend | D3 or Cytoscape.js |
+| AI enrichment | Claude API (claude-sonnet-4-6) |
 
-- File naming: `<domain>_<type>.py` (e.g., `card_events.py`, `card_normalizer.py`, `card_generator.py`) — not generic names like `events.py`.
-- Pydantic v2 style: use `@field_validator` with `@classmethod`, not the v1 `@validator`.
-- `mode="before"` on timestamp validators to handle raw input before type coercion.
-- New payment rails (ACH, WIRE, CRYPTO) follow the same pattern: extend `BasePaymentEvent`, add rail-specific fields, set default `rail` and `event_type` via `Field(default=...)`.
+## Data model
 
-## Running the Backend
+**Neo4j nodes** — types: `account`, `merchant`, `bank`, `exchange`. Properties: `kyc_tier`, `risk_score`, `country`, `account_age`, `cumulative_volume`.
 
-No run commands are defined yet — `main.py` and most modules are stubs. When adding startup logic, the Faust app is the expected entry point: `faust -A consumer.faust_app worker`.
+**Neo4j edges** — two directed edge types are maintained per payment:
+- `TRANSFER` — one edge per transaction, keyed by `txn_id` (MERGE key). Properties: `amount_cents`, `ts` (unix seconds), `rail`, `event_type`. Full per-transaction detail; used for audit and per-txn tracing.
+- `FLOWS_TO` — one aggregate edge per directed account pair. Properties: `tx_count`, `total_amount`, `first_ts`, `last_ts`, `min_amount`, `max_amount`, `rail`. Graph algorithms (cycle detection, PageRank, Louvain) run on `FLOWS_TO`, because collapsing the 20-50 parallel `TRANSFER` edges between a pair into one edge keeps variable-length traversal from exploding combinatorially (branching = distinct neighbours, not parallel-edge count).
 
-## Known Issues in Current Code
+**Postgres** — canonical transaction records + outbox table (`pending_graph_sync` flag).
 
-- `BasePaymentEvent.raw_payload` has a typo: `default_factor=dict` should be `default_factory=dict` — fix before using.
-- `enforcu_utc` validator name is misspelled (missing `e`) — harmless but inconsistent.
+**Redis** — sorted sets keyed `edge:{node_a}:{node_b}`, scored by timestamp. Used for time-windowed volume queries (ZRANGEBYSCORE).
+
+## Key patterns
+
+**Dual-write consistency** — write to Postgres first with `pending_graph_sync = true`. Background outbox worker reads pending rows, writes to Neo4j, clears flag on success. Graph is eventually consistent with Postgres, never ahead of it. Retries use exponential backoff.
+
+**Neo4j upserts** — use `MERGE` inside a transaction to atomically create nodes if missing. `TRANSFER` is MERGEd on `txn_id` (idempotent on outbox retry). `FLOWS_TO` is MERGEd on the account pair and its aggregates (`tx_count`, `total_amount`, min/max amount, first/last ts) are incremented on match. Never plain `CREATE`. Aggregate double-counting on `FLOWS_TO` is prevented by the outbox's once-delivery guarantee.
+
+**Time-windowed queries** — do not hit Neo4j for volume in a time window. Use Redis ZRANGEBYSCORE on the relevant sorted set. Microsecond latency.
+
+**Graph algorithms** — only run on subgraphs that received new edges in the processing window, not the full graph. Cycle detection traverses `FLOWS_TO` with a depth limit and time window: depth 6-8 and a 48h window for real-time/streaming; depth up to 12 with a wider window for batch/investigative sweeps (validated against IBM AML: 72% recall at depth 8, 87% at depth 12, both at 100% precision — see `benchmarks/ibm_aml/`). A per-account query timeout bounds worst-case latency so a deep search never stalls the pipeline. Cross-currency cycles and chains longer than the depth limit are the documented blindspots owned by FX normalization and the Louvain/PageRank detectors respectively.
+
+**AI enrichment** — construct a natural-language subgraph summary, pass to Claude with `get_subgraph(account_id, depth, window)` tool, return structured output: `risk_level` (low/medium/high/critical), `confidence`, `explanation`. Explainability is a regulatory requirement, not optional.
+
+## Conventions
+
+- All graph writes go through the outbox — never write directly to Neo4j from the consumer without the Postgres record being committed first.
+- Node type is always one of the four defined types. Do not invent new node types without updating the schema docs.
+- Edge weights are always incremented, never overwritten — existing history must be preserved.
+- Risk scores are always produced with a written explanation. Never emit a bare numeric score.
+- Cypher queries use named parameters, never string interpolation.
+- All time values stored and compared in UTC.
+
+## Key queries (named API endpoints)
+
+- `shortest_path_between(account_a, account_b)` — how two accounts are connected through intermediaries
+- `subgraph_around(account_id, depth=3)` — full neighborhood up to N hops
+- `flow_between(account_a, account_b, window='7d')` — total volume, path count, avg hop time in window
