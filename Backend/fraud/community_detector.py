@@ -40,6 +40,7 @@ from config import (
     LOUVAIN_RESOLUTION,
     LOUVAIN_WEIGHT_MODE,
     LOUVAIN_MIN_COMMUNITY_SIZE,
+    LOUVAIN_MIN_EDGE_TX_COUNT,
     LOUVAIN_CORE_K,
     LOUVAIN_DENSITY_REF,
     LOUVAIN_VOLUME_FLOOR_CENTS,
@@ -155,6 +156,29 @@ def build_undirected_graph(
         for row in agg.itertuples(index=False)
     )
     return graph
+
+
+def filter_weak_edges(
+    graph: nx.Graph,
+    min_tx_count: int = LOUVAIN_MIN_EDGE_TX_COUNT,
+) -> nx.Graph:
+    """
+    Drop edges whose combined tx_count falls below min_tx_count before Louvain
+    partitions the graph.
+
+    See LOUVAIN_MIN_EDGE_TX_COUNT in config.py for the rationale and the
+    benchmark numbers this threshold was tuned against. Nodes that lose all
+    their edges simply become isolated and never reach LOUVAIN_MIN_COMMUNITY_SIZE
+    downstream — no separate cleanup needed.
+    """
+    if min_tx_count <= 1:
+        return graph
+    pruned = nx.Graph()
+    pruned.add_nodes_from(graph.nodes)
+    pruned.add_edges_from(
+        (u, v, d) for u, v, d in graph.edges(data=True) if d["tx_count"] >= min_tx_count
+    )
+    return pruned
 
 
 # ---------------------------------------------------------------------------
@@ -475,7 +499,8 @@ class CommunityDetector:
 
         Steps:
         1. Export FLOWS_TO edges active within LOUVAIN_WINDOW_DAYS
-        2. Build the undirected weighted graph, run seeded Louvain
+        2. Build the undirected weighted graph, drop edges under
+           LOUVAIN_MIN_EDGE_TX_COUNT (weak-edge filter), run seeded Louvain
         3. Split any internally-disconnected community into connected components
         4. Drop communities under LOUVAIN_MIN_COMMUNITY_SIZE (noise)
         5. Fingerprint each community on its top-K core; community_id = fp[:12]
@@ -501,6 +526,7 @@ class CommunityDetector:
         if graph.number_of_nodes() == 0:
             logger.info("Louvain batch: no active FLOWS_TO edges in window — nothing to do")
             return {"communities": 0, "assignments": 0, "flags": []}
+        graph = filter_weak_edges(graph)
 
         raw_communities = partition_graph(graph)
         # Guarantee each community is internally connected before it earns an

@@ -18,6 +18,7 @@ from fraud.community_detector import (
     community_fingerprint,
     core_members,
     edge_weight,
+    filter_weak_edges,
     partition_graph,
     score_community,
     split_disconnected,
@@ -88,6 +89,52 @@ class TestBuildUndirectedGraph:
         g = build_undirected_graph(edges)
         assert g.number_of_edges() == 2
         assert set(g.nodes) == {"A", "B", "C"}
+
+
+# ---------------------------------------------------------------------------
+# filter_weak_edges
+# ---------------------------------------------------------------------------
+
+class TestFilterWeakEdges:
+    def test_drops_edges_below_threshold(self):
+        edges = [
+            {"src": "A", "dst": "B", "total_amount": 100, "tx_count": 1},
+            {"src": "B", "dst": "C", "total_amount": 100, "tx_count": 5},
+        ]
+        g = build_undirected_graph(edges, weight_mode="tx_count")
+        pruned = filter_weak_edges(g, min_tx_count=3)
+        assert pruned.number_of_edges() == 1
+        assert set(pruned.edges) == {("B", "C")}
+
+    def test_threshold_is_on_combined_tx_count_after_merge(self):
+        # A->B tx_count=1, B->A tx_count=1 merge to combined tx_count=2 in
+        # build_undirected_graph, which clears a min_tx_count=2 filter even
+        # though neither individual direction would.
+        edges = [
+            {"src": "A", "dst": "B", "total_amount": 100, "tx_count": 1},
+            {"src": "B", "dst": "A", "total_amount": 100, "tx_count": 1},
+        ]
+        g = build_undirected_graph(edges)
+        pruned = filter_weak_edges(g, min_tx_count=2)
+        assert pruned.number_of_edges() == 1
+
+    def test_min_tx_count_one_is_a_noop(self):
+        edges = [{"src": "A", "dst": "B", "total_amount": 100, "tx_count": 1}]
+        g = build_undirected_graph(edges)
+        pruned = filter_weak_edges(g, min_tx_count=1)
+        assert pruned.number_of_edges() == g.number_of_edges()
+
+    def test_isolated_nodes_left_behind_by_filter_stay_in_graph(self):
+        # A-B survives, B-C doesn't -- C becomes isolated rather than vanishing,
+        # so downstream min-size filtering (not this function) decides its fate.
+        edges = [
+            {"src": "A", "dst": "B", "total_amount": 100, "tx_count": 5},
+            {"src": "B", "dst": "C", "total_amount": 100, "tx_count": 1},
+        ]
+        g = build_undirected_graph(edges, weight_mode="tx_count")
+        pruned = filter_weak_edges(g, min_tx_count=3)
+        assert "C" in pruned.nodes
+        assert pruned.degree("C") == 0
 
 
 # ---------------------------------------------------------------------------
@@ -377,6 +424,8 @@ def _two_community_edges():
       - suspicious: 8 accounts S0..S7, complete graph, $50k per corridor,
         S0 and S1 already flagged by the cycle detector
       - benign: B0—B1—B2 chain, $200 per corridor
+    tx_count is >= LOUVAIN_MIN_EDGE_TX_COUNT on every edge so CommunityDetector.run()'s
+    weak-edge filter doesn't strip either cluster down before Louvain sees it.
     """
     edges = []
     suspicious = [f"S{i}" for i in range(8)]
@@ -384,10 +433,10 @@ def _two_community_edges():
         for j in range(i + 1, 8):
             edges.append({
                 "src": suspicious[i], "dst": suspicious[j],
-                "total_amount": 5_000_000, "tx_count": 3,
+                "total_amount": 5_000_000, "tx_count": 25,
             })
-    edges.append({"src": "B0", "dst": "B1", "total_amount": 20_000, "tx_count": 1})
-    edges.append({"src": "B1", "dst": "B2", "total_amount": 20_000, "tx_count": 1})
+    edges.append({"src": "B0", "dst": "B1", "total_amount": 20_000, "tx_count": 25})
+    edges.append({"src": "B1", "dst": "B2", "total_amount": 20_000, "tx_count": 25})
     return edges
 
 
