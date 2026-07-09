@@ -172,8 +172,14 @@ LOUVAIN_MIN_EDGE_TX_COUNT = int(os.getenv("LOUVAIN_MIN_EDGE_TX_COUNT", "20"))
 # the way. Set to 1 to disable filtering.
 
 # --- Community scoring knobs ---
-LOUVAIN_DENSITY_REF = float(os.getenv("LOUVAIN_DENSITY_REF", "0.15"))
+LOUVAIN_DENSITY_REF = float(os.getenv("LOUVAIN_DENSITY_REF", "0.6"))
 # Internal edge density (2m / n(n-1)) at which density_score saturates to 1.0.
+# 0.15 saturated for free: a bare connected spanning tree (the minimum
+# possible density for a connected community) already clears it for any n
+# up to ~14, so density_score couldn't distinguish a mesh from a chain at
+# the community sizes this scorer sees most. Raised via sweep on top of the
+# LOUVAIN_MIN_EDGE_TX_COUNT filter (see that knob) -- see commit history for
+# the before/after benchmark numbers.
 
 LOUVAIN_VOLUME_FLOOR_CENTS = int(os.getenv("LOUVAIN_VOLUME_FLOOR_CENTS", "1000000"))
 # $10k — internal volume at/below this scores ~0.0 for the volume dimension.
