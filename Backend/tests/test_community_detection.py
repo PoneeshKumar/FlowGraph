@@ -288,6 +288,30 @@ class TestScoreCommunity:
                 flagged_member_count=0,
             )
 
+    def test_bare_spanning_tree_scores_zero_density_at_any_size(self):
+        # A chain has exactly n-1 edges -- zero excess connectivity beyond the
+        # bare minimum needed to stay connected, regardless of how large n is.
+        small = score_community(
+            member_ids=["A", "B", "C"], internal_edge_count=2,
+            internal_total_cents=0, flagged_member_count=0,
+        )
+        large = score_community(
+            member_ids=[f"N{i}" for i in range(500)], internal_edge_count=499,
+            internal_total_cents=0, flagged_member_count=0,
+        )
+        assert small["details"]["tree_excess_ratio"] == 0.0
+        assert large["details"]["tree_excess_ratio"] == 0.0
+        assert small["details"]["density_score"] == 0.0
+        assert large["details"]["density_score"] == 0.0
+
+    def test_complete_graph_has_high_tree_excess_ratio(self):
+        # 8-node complete graph: 28 edges vs a 7-edge spanning tree minimum.
+        result = score_community(
+            member_ids=[f"S{i}" for i in range(8)], internal_edge_count=28,
+            internal_total_cents=0, flagged_member_count=0,
+        )
+        assert result["details"]["tree_excess_ratio"] == pytest.approx(3.0)
+
 
 # ---------------------------------------------------------------------------
 # PostgresClient.get_flagged_account_ids (query construction — connection faked)

@@ -158,18 +158,22 @@ LOUVAIN_EXPORT_TIMEOUT_SECONDS = float(os.getenv("LOUVAIN_EXPORT_TIMEOUT_SECONDS
 LOUVAIN_ASSIGN_BATCH_SIZE = int(os.getenv("LOUVAIN_ASSIGN_BATCH_SIZE", "5000"))
 # Rows per UNWIND transaction when writing community_id node properties.
 
-LOUVAIN_MIN_EDGE_TX_COUNT = int(os.getenv("LOUVAIN_MIN_EDGE_TX_COUNT", "20"))
+LOUVAIN_MIN_EDGE_TX_COUNT = int(os.getenv("LOUVAIN_MIN_EDGE_TX_COUNT", "1"))
 # Minimum combined tx_count (both directions, already summed by
 # build_undirected_graph) an account pair needs before its edge joins
-# Louvain's input graph. A single one-off transaction is as weak a
-# same-community signal as a shared coffee-shop IP in an identity graph —
-# cheap for Louvain to bridge two otherwise-unrelated dense regions with.
-# On the IBM AML HI-Small benchmark, 96.5% of flagged communities at the
-# unfiltered default (1) contained ZERO labeled fraud accounts of any
-# typology; they were background accounts stitched together by chains of
-# tx_count<=2 edges. Tuned via sweep over benchmarks/results/: F1 rises from
-# 1.27% (untuned) to 46.44% at 20, recall trading from 81.65% to 32.59% along
-# the way. Set to 1 to disable filtering.
+# Louvain's input graph. Default 1 = disabled.
+#
+# Tried raising this to 20 (see git history) to kill single-transaction
+# "weak" edges gluing unrelated background accounts into giant communities.
+# It worked on precision (F1 1.27% -> 46.44%) but gutted recall (81.65% ->
+# 32.59%) because real fan-in/fan-out/gather-scatter laundering ALSO routes
+# through mostly single-transaction edges by design (structuring specifically
+# avoids repeated same-pair transfers) -- verified directly against a labeled
+# 18-account gather-scatter ring where 21/33 internal edges had tx_count=1
+# and the max was 6. tx_count, dollar amount, and time-span were all checked
+# and none separate real rings from noise at the edge level in this dataset.
+# Reverted to disabled; see LOUVAIN_DENSITY_REF for the shape-based fix that
+# replaced this approach.
 
 # --- Community scoring knobs ---
 LOUVAIN_DENSITY_REF = float(os.getenv("LOUVAIN_DENSITY_REF", "0.6"))

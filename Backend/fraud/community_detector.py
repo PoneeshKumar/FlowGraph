@@ -242,14 +242,25 @@ def score_community(
     Five dimensions, mirroring the cycle scorer's shape:
       1. size band     — laundering rings run ~5–50 accounts; tiny communities are
                          below Louvain's resolution, huge ones are merchant hubs
-      2. density       — internal edges / possible edges; meshes are dense,
-                         benign hub-and-spoke stars are not
+      2. density       — edges beyond the bare spanning-tree minimum (n-1),
+                         relative to that minimum; a mesh has excess
+                         connectivity, a chain glued together by Louvain
+                         does not, at any community size
       3. volume        — log-scaled internal money movement in the window
       4. isolation     — 1 − conductance: an isolated cluster (money stays inside)
                          is more suspicious than a dense corner of an otherwise
                          well-connected legitimate hub. conductance is computed by
                          the caller (community_conductance / nx.conductance); 0.0
-                         means no flow leaves the community → cohesion 1.0
+                         means no flow leaves the community → cohesion 1.0.
+                         Tried gating this off when a community equals its entire
+                         weakly-connected component (isolation is then structurally
+                         guaranteed, not chosen) — reverted: on the IBM AML
+                         benchmark, every single one of the true positives the
+                         un-gated scorer found was ALSO a standalone component,
+                         so gating wiped out real detections at the same rate
+                         as noise (precision 1.23% -> 0.00%). Small real fraud
+                         rings apparently need this signal to clear the medium
+                         bar just as much as background noise does.
       5. risk overlap  — fraction of members already flagged by OTHER detectors
                          (cross-detector signal; strongest single indicator)
 
@@ -286,9 +297,25 @@ def score_community(
         size_score = 0.1
 
     # --- 2. Density score ---
+    # Raw density (internal_edge_count / all possible pairs) is kept for
+    # context in the explanation, but scoring uses tree_excess_ratio: edges
+    # beyond the bare minimum (n-1) needed to stay connected, relative to
+    # that minimum. Raw density collapses toward 0 for any large n regardless
+    # of shape — a 2,126-node bare spanning tree has density 0.001%, making it
+    # numerically indistinguishable from truly sparse noise at that scale, so
+    # it couldn't tell a mesh from a chain once communities got past a few
+    # dozen members (see git history: a min-tx-count edge filter was tried
+    # first and reverted — it cut real fan-in/fan-out rings along with noise
+    # because both rely on single-transaction edges). tree_excess_ratio is
+    # scale-invariant instead: a bare spanning tree scores exactly 0 at any n,
+    # a complete graph scores ~n/2 — "how much extra connectivity beyond
+    # merely-connected" is the actual suspicious signal, not a fraction of a
+    # quadratic ceiling almost nothing reaches.
     possible_edges = n * (n - 1) / 2
     density = internal_edge_count / possible_edges if possible_edges else 0.0
-    density_score = min(1.0, density / density_ref) if density_ref > 0 else 0.0
+    min_edges_for_connectivity = max(n - 1, 1)
+    tree_excess_ratio = max(0.0, internal_edge_count - min_edges_for_connectivity) / min_edges_for_connectivity
+    density_score = min(1.0, tree_excess_ratio / density_ref) if density_ref > 0 else 0.0
 
     # --- 3. Volume score (log scale, floor → 0.0, cap → 1.0) ---
     _floor = max(volume_floor_cents, 1)
@@ -344,6 +371,7 @@ def score_community(
         "internal_edge_count":  internal_edge_count,
         "internal_total_cents": internal_total_cents,
         "density":              round(density, 4),
+        "tree_excess_ratio":    round(tree_excess_ratio, 4),
         "conductance":          round(conductance, 4),
         "flagged_member_count": flagged_member_count,
         "size_score":           round(size_score, 4),
