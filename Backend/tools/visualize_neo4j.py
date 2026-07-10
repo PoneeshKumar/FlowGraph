@@ -63,17 +63,33 @@ def _select_community_ids(session, args) -> list[str]:
             "MATCH (a:Account) WHERE a.community_id IS NOT NULL "
             "RETURN a.community_id AS cid, count(*) AS n ORDER BY n DESC"
         )
-        return [r["cid"] for r in rows]
+        cids = [r["cid"] for r in rows]
+    else:
+        # Default: communities whose size is in a drawable window, largest first.
+        rows = session.run(
+            "MATCH (a:Account) WHERE a.community_id IS NOT NULL "
+            "WITH a.community_id AS cid, count(*) AS n "
+            "WHERE n >= $lo AND n <= $hi "
+            "RETURN cid, n ORDER BY n DESC LIMIT $k",
+            lo=args.min_size, hi=args.max_size, k=args.communities,
+        )
+        cids = [r["cid"] for r in rows]
 
-    # Default: communities whose size is in a drawable window, largest first.
-    rows = session.run(
-        "MATCH (a:Account) WHERE a.community_id IS NOT NULL "
-        "WITH a.community_id AS cid, count(*) AS n "
-        "WHERE n >= $lo AND n <= $hi "
-        "RETURN cid, n ORDER BY n DESC LIMIT $k",
-        lo=args.min_size, hi=args.max_size, k=args.communities,
-    )
-    return [r["cid"] for r in rows]
+    # --highlight must render even if it'd otherwise be excluded by the size
+    # window or bumped off the end of the top-k list — and _fetch()'s
+    # node-budget skip only ever drops from the *tail* of this list, so put
+    # them first (in the order given) to guarantee they're drawn.
+    for hl in reversed(_highlight_ids(args)):
+        if hl in cids:
+            cids.remove(hl)
+        cids.insert(0, hl)
+    return cids
+
+
+def _highlight_ids(args) -> list[str]:
+    if not args.highlight:
+        return []
+    return [h.strip() for h in args.highlight.split(",") if h.strip()]
 
 
 def _fetch(session, args):
@@ -172,6 +188,8 @@ def main() -> None:
     ap = argparse.ArgumentParser(description=__doc__,
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--community", help="Focus a single community_id")
+    ap.add_argument("--highlight", help="Draw the rest of the selection normally, but ring "
+                    "these community_ids' nodes so they stand out (comma-separated)")
     ap.add_argument("--prefix", help="Only nodes whose id starts with this (e.g. DEMO_LV_)")
     ap.add_argument("--all", action="store_true",
                     help="All communities (bounded by --max-nodes); may be dense")
@@ -206,6 +224,7 @@ def main() -> None:
         "nodes": out_nodes,
         "links": out_links,
         "communities": communities,
+        "highlight": _highlight_ids(args),
         "meta": {
             "generated": datetime.now(timezone.utc).isoformat(timespec="seconds"),
             "nodeCount": len(out_nodes),
@@ -429,6 +448,16 @@ function draw() {
     if (n === hovered) { ctx.lineWidth = 2/scale; ctx.strokeStyle = '#fff'; ctx.stroke(); }
   }
   ctx.globalAlpha = 1;
+  // --highlight ring(s) — drawn in their own pass, after every node's fill,
+  // so a ring is never painted over by a neighbouring node
+  if (DATA.highlight.length) {
+    const hlSet = new Set(DATA.highlight);
+    for (const n of nodes) {
+      if (!hlSet.has(n.cid) || !nodeVisible(n)) continue;
+      ctx.beginPath(); ctx.arc(n.x, n.y, radius(n) + 3/scale, 0, Math.PI*2);
+      ctx.lineWidth = 2.5/scale; ctx.strokeStyle = '#fbbf24'; ctx.stroke();
+    }
+  }
   // labels
   if (labelMode !== 'none') {
     ctx.fillStyle = '#e5e7eb'; ctx.font = `${11/scale}px sans-serif`;
@@ -549,10 +578,14 @@ if (DATA.meta.communitiesSkipped > 0)
     `never truncated</span>`;
 
 const rows = document.getElementById('legend-rows');
+const highlightSet = new Set(DATA.highlight);
 DATA.communities.forEach(c => {
   const row = document.createElement('div'); row.className = 'lrow';
+  const isHl = highlightSet.has(c.cid);
+  if (isHl) row.style.outline = '1px solid #fbbf24';
   row.innerHTML = `<span class="sw" style="background:${c.color}"></span>`
     + `<code>${c.cid.length > 14 ? c.cid.slice(0,12)+'…' : c.cid}</code>`
+    + (isHl ? ' <span style="color:#fbbf24">★</span>' : '')
     + `<span class="n">${c.size}</span>`;
   row.addEventListener('click', () => {
     isolated = (isolated === c.cid) ? null : c.cid;
