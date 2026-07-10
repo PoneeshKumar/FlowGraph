@@ -394,22 +394,48 @@ def score_community(
 # Connectivity + conductance helpers (pure — operate on the built graph)
 # ---------------------------------------------------------------------------
 
-def community_conductance(graph: nx.Graph, members: Iterable[str]) -> float:
+def community_conductance(
+    graph: nx.Graph,
+    members: Iterable[str],
+    node_weighted_degree: Optional[Dict[str, float]] = None,
+    total_weighted_degree: Optional[float] = None,
+) -> float:
     """
     Fraction of a community's edge weight that crosses its boundary.
 
     Low = an isolated cluster money stays inside (suspicious); high = a dense
     sub-region of otherwise-normal traffic. Returns 0.0 for a community that
-    spans the whole graph — there is no boundary, and nx.conductance would
-    divide by zero (empty complement).
+    spans the whole graph — there is no boundary.
+
+    cut(S) = vol(S) - 2*internal_weight(S); conductance = cut(S) /
+    min(vol(S), vol(complement)). Mathematically identical to
+    nx.conductance(graph, S, weight="weight") (verified directly against it)
+    but O(|members|) once degree is known, instead of nx.conductance's cost —
+    this is called once per kept community, thousands of times per batch run,
+    and the difference is the gap between a run finishing in seconds versus
+    not finishing inside a reasonable batch window. A caller scoring many
+    communities against the same graph should precompute
+    node_weighted_degree (= dict(graph.degree(weight="weight"))) and
+    total_weighted_degree (= sum of its values) once and pass them in;
+    otherwise they're computed fresh here every call.
     """
     member_set = set(members)
     if len(member_set) >= graph.number_of_nodes():
         return 0.0
-    try:
-        return nx.conductance(graph, member_set, weight="weight")
-    except ZeroDivisionError:
-        return 0.0
+
+    if node_weighted_degree is None:
+        node_weighted_degree = dict(graph.degree(weight="weight"))
+    if total_weighted_degree is None:
+        total_weighted_degree = sum(node_weighted_degree.values())
+
+    vol_s = sum(node_weighted_degree[m] for m in member_set)
+    internal_weight = sum(
+        d["weight"] for _, _, d in graph.subgraph(member_set).edges(data=True)
+    )
+    cut = vol_s - 2 * internal_weight
+    vol_complement = total_weighted_degree - vol_s
+    denom = min(vol_s, vol_complement)
+    return 0.0 if denom <= 0 else max(0.0, min(1.0, cut / denom))
 
 
 def split_disconnected(
@@ -561,6 +587,11 @@ class CommunityDetector:
         # identity/fingerprint (Louvain can emit disconnected communities).
         communities = split_disconnected(raw_communities, graph)
 
+        # Precomputed once and reused by community_conductance for every kept
+        # community below — see that function's docstring for why this matters.
+        node_weighted_degree = dict(graph.degree(weight="weight"))
+        total_weighted_degree = sum(node_weighted_degree.values())
+
         flagged_accounts: Set[str] = set()
         if self.postgres is not None:
             flagged_accounts = set(
@@ -594,7 +625,9 @@ class CommunityDetector:
                 internal_edge_count=sub.number_of_edges(),
                 internal_total_cents=internal_total,
                 flagged_member_count=len(flagged_accounts & set(members)),
-                conductance=community_conductance(graph, members),
+                conductance=community_conductance(
+                    graph, members, node_weighted_degree, total_weighted_degree
+                ),
             )
 
             if scored["risk_score"] < LOUVAIN_LEVEL_MEDIUM:

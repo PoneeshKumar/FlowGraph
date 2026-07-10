@@ -401,12 +401,26 @@ class TestCommunityConductance:
         assert community_conductance(g, {"A", "B"}) == 0.0
 
     def test_whole_graph_conductance_is_zero_not_error(self):
-        # S == all nodes → empty complement → nx.conductance divides by zero;
+        # S == all nodes → empty complement → would divide by zero;
         # the helper must guard and return 0.0, not raise.
         g = build_undirected_graph([
             {"src": "A", "dst": "B", "total_amount": 0, "tx_count": 1},
         ], weight_mode="tx_count")
         assert community_conductance(g, {"A", "B"}) == 0.0
+
+    def test_precomputed_degree_matches_fresh_computation(self):
+        # A-B-C-D path plus A-C: {A,B} leaks to C, {A,B,C,D} doesn't (whole graph).
+        g = build_undirected_graph([
+            {"src": "A", "dst": "B", "total_amount": 0, "tx_count": 3},
+            {"src": "B", "dst": "C", "total_amount": 0, "tx_count": 2},
+            {"src": "C", "dst": "D", "total_amount": 0, "tx_count": 1},
+            {"src": "A", "dst": "C", "total_amount": 0, "tx_count": 5},
+        ], weight_mode="tx_count")
+        fresh = community_conductance(g, {"A", "B"})
+        deg = dict(g.degree(weight="weight"))
+        precomputed = community_conductance(g, {"A", "B"}, deg, sum(deg.values()))
+        assert fresh == pytest.approx(precomputed)
+        assert fresh > 0.0  # this subset does leak to C
 
 
 # ---------------------------------------------------------------------------
