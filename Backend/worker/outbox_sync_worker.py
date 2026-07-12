@@ -118,11 +118,6 @@ class OutboxSyncWorker:
                         idempotency_key=record["idempotency_key"],
                     )
 
-                    if hasattr(self.neo4j, "compute_local_pagerank"):
-                        await self.neo4j.compute_local_pagerank(
-                            [event_payload["sender_id"], event_payload["receiver_id"]]
-                        )
-
                     # Sync to Redis (time-windowed edge weights)
                     await self.redis.add_edge_to_timeseries(
                         sender_id=event_payload["sender_id"],

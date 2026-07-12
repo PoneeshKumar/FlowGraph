@@ -424,10 +424,10 @@ class Neo4jClient:
         query = f"""
         MATCH (src:Account)
         WHERE src.id IN $account_ids
-        MATCH (src)-[rel:SENDS_TO]->(dst:Account)
+        MATCH (src)-[rel:FLOWS_TO]->(dst:Account)
         WHERE dst.id IN $account_ids OR dst.id IN $expanded_ids
         WITH src, dst, rel
-        RETURN src.id AS source_id, dst.id AS target_id, rel.amount_cents AS weight
+        RETURN src.id AS source_id, dst.id AS target_id, rel.total_amount AS weight
         """
 
         try:

@@ -10,9 +10,6 @@ import json
 
 from db.neo4j import Neo4jClient
 
-pytestmark = pytest.mark.anyio
-
-
 class TestPostgresClient:
     """Tests for PostgreSQL client."""
 
@@ -148,6 +145,51 @@ class TestNeo4jClient:
         result = await client.compute_local_pagerank(["account_123", "account_456"])
 
         assert result == {}
+
+    @pytest.mark.asyncio
+    async def test_compute_local_pagerank_uses_flows_to_edges(self):
+        """PageRank should read the aggregated FLOWS_TO edge weights."""
+        client = Neo4jClient()
+
+        class FakeResult:
+            def __init__(self, rows):
+                self._rows = rows
+
+            async def data(self):
+                return self._rows
+
+        class FakeSession:
+            def __init__(self, query_calls):
+                self.query_calls = query_calls
+
+            async def __aenter__(self):
+                return self
+
+            async def __aexit__(self, exc_type, exc, tb):
+                return False
+
+            async def run(self, query, **kwargs):
+                self.query_calls.append((query, kwargs))
+                return FakeResult([])
+
+        class FakeDriver:
+            def __init__(self, session):
+                self._session = session
+
+            def session(self, database=None):
+                return self._session
+
+        query_calls = []
+        client.driver = FakeDriver(FakeSession(query_calls))
+
+        result = await client.compute_local_pagerank(["acct_a", "acct_b"])
+
+        assert result == {}
+        assert query_calls, "PageRank query should be executed"
+        query, kwargs = query_calls[0]
+        assert "FLOWS_TO" in query
+        assert "rel.total_amount" in query
+        assert "rel.amount_cents" not in query
 
     @pytest.mark.asyncio
     async def test_get_subgraph(self, mock_neo4j_client):

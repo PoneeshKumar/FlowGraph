@@ -12,7 +12,8 @@ def _normalize_adjacency(adjacency: Mapping[str, Mapping[str, float]] | Sequence
     if adjacency is None:
         raise ValueError("adjacency cannot be None")
 
-    if hasattr(adjacency, "items") and not isinstance(adjacency, (str, bytes)):
+    # Prefer explicit Mapping check to satisfy static type checkers
+    if isinstance(adjacency, Mapping):
         items = adjacency.items()
     else:
         try:
