@@ -52,6 +52,18 @@ Payment events → Kafka → Python consumer (Faust)
 | Frontend | D3 or Cytoscape.js |
 | AI enrichment | Claude API (claude-sonnet-4-6) |
 
+## AI / ML layer
+
+Risk classification uses a trained GNN (GraphSAGE architecture, PyTorch Geometric).
+
+- **Loss function**: Focal Loss (γ=2.0, α=0.25) to penalize missing the fraud class
+- **Class imbalance**: SMOTE on node feature vectors before training
+- **Node features**: account properties + PageRank score + Louvain community_id + Redis time-windowed volumes (1h / 24h / 7d)
+- **Architecture**: SAGEConv layers for inductive learning — generalizes to unseen accounts
+- **Explainability**: natural language explanation generated from GNN output + subgraph structure (regulatory requirement)
+
+The GNN is the primary classifier; cycle detection + Louvain detectors serve as feature providers and weak labels. Claude API is used only for secondary explainability in edge cases where GNN confidence is low.
+
 ## Data model
 
 **Neo4j nodes** — types: `account`, `merchant`, `bank`, `exchange`. Properties: `kyc_tier`, `risk_score`, `country`, `account_age`, `cumulative_volume`.
