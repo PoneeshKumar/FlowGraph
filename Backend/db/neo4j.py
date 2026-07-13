@@ -17,8 +17,10 @@ import logging
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
 
-from neo4j import AsyncGraphDatabase, AsyncDriver, Query
+from neo4j import AsyncGraphDatabase, AsyncDriver, AsyncSession, Query
 from neo4j.exceptions import ServiceUnavailable
+
+from algorithms.pagerank import compute_weighted_pagerank
 
 from config import (
     NEO4J_URI,
@@ -190,6 +192,8 @@ class Neo4jClient:
                 transaction_id,
                 amount_cents,
             )
+
+            await self.compute_local_pagerank([sender_id, receiver_id])
         except ServiceUnavailable as e:
             logger.error(f"Neo4j temporarily unavailable: {e}")
             raise
@@ -393,6 +397,102 @@ class Neo4jClient:
         except Exception as e:
             logger.error(f"Failed to create account node: {e}")
             raise
+
+    async def compute_local_pagerank(
+        self,
+        account_ids: List[str],
+        depth: int = 2,
+        max_iterations: int = 30,
+        tolerance: float = 1e-6,
+    ) -> Dict[str, float]:
+        """Compute weighted PageRank for a small local subgraph around the given accounts.
+
+        The implementation pulls a local neighborhood from Neo4j, computes PageRank
+        over the induced subgraph, and writes the scores back to the participating
+        account nodes.
+        """
+        if not self.driver:
+            logger.debug("Neo4j driver not initialized; skipping PageRank computation")
+            return {}
+
+        if not account_ids:
+            return {}
+
+        unique_account_ids = list(dict.fromkeys(account_ids))
+        local_accounts = set(unique_account_ids)
+
+        query = f"""
+        MATCH (src:Account)
+        WHERE src.id IN $account_ids
+        MATCH (src)-[rel:FLOWS_TO]->(dst:Account)
+        WHERE dst.id IN $account_ids OR dst.id IN $expanded_ids
+        WITH src, dst, rel
+        RETURN src.id AS source_id, dst.id AS target_id, rel.total_amount AS weight
+        """
+
+        try:
+            async with self.driver.session(database=NEO4J_DATABASE) as session:
+                result = await session.run(
+                    query,
+                    account_ids=unique_account_ids,
+                    expanded_ids=unique_account_ids,
+                )
+                records = await result.data()
+        except Exception as e:
+            logger.error(f"Failed to fetch local graph for PageRank: {e}")
+            return {}
+
+        adjacency: Dict[str, Dict[str, float]] = {}
+        for record in records:
+            source_id = record.get("source_id")
+            target_id = record.get("target_id")
+            weight = float(record.get("weight", 0) or 0)
+            if not source_id or not target_id:
+                continue
+
+            adjacency.setdefault(source_id, {})[target_id] = weight
+
+            local_accounts.add(source_id)
+            local_accounts.add(target_id)
+
+        for account_id in unique_account_ids:
+            adjacency.setdefault(account_id, {})
+
+        if not adjacency:
+            return {}
+
+        scores = compute_weighted_pagerank(
+            adjacency,
+            max_iterations=max_iterations,
+            tolerance=tolerance,
+        )
+
+        if not scores:
+            return {}
+
+        update_query = """
+        UNWIND $updates AS update
+        MATCH (n:Account {id: update.account_id})
+        SET n.pagerank_score = update.score,
+            n.pagerank_updated_at = timestamp()
+        """
+
+        updates = [
+            {"account_id": account_id, "score": round(scores.get(account_id, 0.0), 8)}
+            for account_id in sorted(local_accounts)
+        ]
+
+        try:
+            async with self.driver.session(database=NEO4J_DATABASE) as session:
+                await session.run(update_query, updates=updates)
+        except Exception as e:
+            logger.error(f"Failed to persist PageRank scores: {e}")
+            return {}
+
+        return {
+            account_id: round(scores.get(account_id, 0.0), 8)
+            for account_id in sorted(local_accounts)
+        }
 
     async def get_subgraph(
         self,

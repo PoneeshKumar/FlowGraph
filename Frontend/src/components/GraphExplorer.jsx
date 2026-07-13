@@ -90,10 +90,14 @@ function GraphEdge({ edge, fromNode, toNode, isActive, index }) {
 function GraphNode({ node, isSelected, onSelect, index }) {
   const r = getNodeRadius(node)
   const color = RISK_VAR[node.risk]
+  const delay = 80 + index * 40
 
   return (
-    /* Outer plain <g> owns position — motion must not touch this transform */
-    <g transform={`translate(${node.x},${node.y})`} onClick={() => onSelect(node)} className="cursor-pointer">
+    <g
+      transform={`translate(${node.x},${node.y})`}
+      onClick={() => onSelect(node)}
+      style={{ cursor: 'pointer' }}
+    >
       <motion.g
         initial={{ opacity: 0, scale: 0.5 }}
         animate={{ opacity: 1, scale: 1 }}
@@ -101,35 +105,45 @@ function GraphNode({ node, isSelected, onSelect, index }) {
       >
         {isSelected && (
           <motion.circle
-            r={r + 6}
+            r={r + 5}
             fill="none"
             stroke={color}
             strokeWidth="1.5"
             initial={{ opacity: 0 }}
-            animate={{ opacity: 0.45 }}
+            animate={{ opacity: 0.4 }}
           />
         )}
+
         <circle
           r={r}
-          fill={color}
-          fillOpacity={isSelected ? 0.22 : 0.1}
           stroke={color}
-          strokeWidth={isSelected ? 2 : 1.4}
-          filter={node.risk === 'critical' ? 'url(#node-glow)' : undefined}
-          style={{ transition: 'fill-opacity .2s ease' }}
+          strokeWidth={isSelected ? 2 : 1.5}
+          style={{
+            fill: isSelected ? `var(--risk-${node.risk}-bg)` : 'var(--bg-card)',
+            transition: 'all 0.18s ease',
+            filter: 'drop-shadow(0 1px 3px rgba(0,0,0,0.10))',
+            animation: `nodePop 0.35s ease ${delay}ms both`,
+          }}
         />
-        <circle r={r * 0.3} fill={color} opacity={0.85} />
+
+        <circle r={r * 0.32} fill={color} opacity={0.75} />
+
+        {node.pagerank !== undefined && (
+          <g>
+            <rect x={r + 4} y={-8} width="54" height="16" rx="8" fill="var(--bg-card)" stroke={color} strokeWidth="1" />
+            <text x={r + 31} y={3} textAnchor="middle" fontSize="7" fontFamily="Space Mono, monospace" fontWeight="700" fill={color}>
+              PR {node.pagerank.toFixed(3)}
+            </text>
+          </g>
+        )}
+
         <text
-          y={r + 13}
+          y={r + 12}
           textAnchor="middle"
           fontSize={isSelected ? 9.5 : 9}
-          fontWeight={isSelected ? 700 : 500}
-          style={{
-            fontFamily: 'var(--font-mono)',
-            fill: isSelected ? color : 'var(--ink-3)',
-            userSelect: 'none',
-            transition: 'fill .15s',
-          }}
+          fontFamily="Space Mono, monospace"
+          fontWeight={isSelected ? 700 : 400}
+          style={{ fill: isSelected ? color : 'var(--text-muted)', userSelect: 'none', transition: 'all 0.15s' }}
         >
           {node.label}
         </text>
