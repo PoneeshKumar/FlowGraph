@@ -80,6 +80,38 @@ class TestOutboxSyncWorker:
         mock_postgres_client.mark_outbox_synced.assert_called_once_with(1)
 
     @pytest.mark.asyncio
+    async def test_sync_cycle_does_not_recompute_pagerank_after_upsert(
+        self, outbox_worker, mock_postgres_client, mock_neo4j_client, mock_redis_client
+    ):
+        """PageRank should be computed once via the graph upsert path, not again in the worker."""
+        pending_record = {
+            "id": 1,
+            "transaction_id": str(uuid4()),
+            "idempotency_key": "key123",
+            "event_payload": {
+                "event_id": str(uuid4()),
+                "sender_id": "sender_123",
+                "receiver_id": "receiver_456",
+                "amount_cents": 5000,
+                "rail": "CARD",
+                "event_type": "AUTH",
+                "timestamp_utc": datetime.now(timezone.utc).isoformat(),
+            },
+            "retry_count": 0,
+            "last_retry_at": None,
+        }
+
+        mock_postgres_client.fetch_pending_outbox.return_value = [pending_record]
+        mock_neo4j_client.upsert_transaction_graph = AsyncMock()
+        mock_neo4j_client.compute_local_pagerank = AsyncMock()
+        mock_redis_client.add_edge_to_timeseries = AsyncMock()
+
+        await outbox_worker._sync_cycle()
+
+        mock_neo4j_client.upsert_transaction_graph.assert_called_once()
+        mock_neo4j_client.compute_local_pagerank.assert_not_called()
+
+    @pytest.mark.asyncio
     async def test_sync_cycle_neo4j_failure_on_first_attempt(
         self, outbox_worker, mock_postgres_client, mock_neo4j_client
     ):

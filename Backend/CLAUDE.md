@@ -87,6 +87,18 @@ pytest                                     # from Backend/ (or `python run_tests
 
 Tests use markers `unit` / `integration` / `e2e`; real-Neo4j integration tests self-skip when Neo4j is unreachable. `.env.example` documents the compose credentials; all tunables are env vars with documented defaults in `config.py` (`CYCLE_*`, `LOUVAIN_*`, `OUTBOX_*`).
 
+## AI / ML layer
+
+Risk classification uses a trained GNN (GraphSAGE architecture, PyTorch Geometric).
+
+- **Loss function**: Focal Loss (γ=2.0, α=0.25) to penalize missing the fraud class
+- **Class imbalance**: SMOTE on node feature vectors before training
+- **Node features**: account properties + PageRank score + Louvain community_id + Redis time-windowed volumes (1h / 24h / 7d)
+- **Architecture**: SAGEConv layers for inductive learning — generalizes to unseen accounts
+- **Explainability**: natural language explanation generated from GNN output + subgraph structure (regulatory requirement)
+
+The GNN is the primary classifier; cycle detection + Louvain detectors serve as feature providers and weak labels. Claude API is used only for secondary explainability in edge cases where GNN confidence is low.
+
 ## Data model
 
 **Neo4j nodes** — schema allows four types: `account`, `merchant`, `bank`, `exchange` (planned properties: `kyc_tier`, `risk_score`, `country`, `account_age`, `cumulative_volume`). The payment write path currently creates only `:Account {id}` nodes. The Louvain batch adds `community_id` (12-hex-char) and `community_detected_at` (epoch seconds) to `Account` nodes.

@@ -31,6 +31,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional
 
+import numpy as np
+
 logger = logging.getLogger(__name__)
 
 # Timestamp formats seen in IBM AML dataset
@@ -124,15 +126,16 @@ def _build_group_from_rows(
     if not amounts or not timestamps:
         return None
 
-    ts_epochs = [t.timestamp() for t in timestamps]
-    span = int(max(ts_epochs) - min(ts_epochs))
+    amounts_arr = np.asarray(amounts, dtype=np.int64)
+    epochs = np.fromiter((t.timestamp() for t in timestamps), dtype=np.float64)
+    span = int(np.ptp(epochs))
 
     return CycleGroup(
         group_id=group_id,
         accounts=accounts_ordered,
         n_hops=len(rows),
-        min_amount_cents=min(amounts),
-        max_amount_cents=max(amounts),
+        min_amount_cents=int(amounts_arr.min()),
+        max_amount_cents=int(amounts_arr.max()),
         span_seconds=span,
         currencies=currencies,
         is_cross_currency=len(currencies) > 1,

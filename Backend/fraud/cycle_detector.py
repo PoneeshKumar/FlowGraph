@@ -21,25 +21,22 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
-import json
 import logging
-import math
-import sys
+import pathlib
 from datetime import datetime, timezone, timedelta
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List
+
+import numpy as np
 
 from config import (
-    CYCLE_MAX_DEPTH,
-    CYCLE_WINDOW_HOURS,
-    CYCLE_MAX_HOP_GAP_HOURS,
-    CYCLE_MAX_LEAK,
     CYCLE_MIN_VALUE_CENTS,
-    CYCLE_MAX_RESULTS,
     CYCLE_FAST_CLOSE_HOURS,
     CYCLE_LEVEL_MEDIUM,
     CYCLE_LEVEL_HIGH,
     CYCLE_LEVEL_CRITICAL,
 )
+from db.neo4j import Neo4jClient
+from db.postgres import PostgresClient
 
 logger = logging.getLogger(__name__)
 
@@ -75,29 +72,41 @@ def score_cycle(
           details: dict     (raw numbers for audit trail)
         }
     """
-    if not amounts or not timestamps:
-        raise ValueError("amounts and timestamps must be non-empty")
+    if not amounts:
+        raise ValueError("amounts must be non-empty")
+    if not timestamps:
+        raise ValueError("timestamps must be non-empty")
     if len(amounts) != len(timestamps):
-        raise ValueError("amounts and timestamps must have equal length")
+        raise ValueError(
+            f"amounts and timestamps must have equal length "
+            f"(got {len(amounts)} amounts, {len(timestamps)} timestamps)"
+        )
 
     n_hops = len(amounts)
-    total_cents = sum(amounts)
-    min_hop_cents = min(amounts)
-    mean_cents = total_cents / n_hops
+    amounts_arr = np.asarray(amounts, dtype=np.float64)
+    timestamps_arr = np.asarray(timestamps, dtype=np.float64)
 
-    # Span of the loop in seconds
-    span_seconds = max(timestamps) - min(timestamps)
+    total_cents = int(amounts_arr.sum())
+    min_hop_cents = int(amounts_arr.min())
+    mean_cents = float(amounts_arr.mean())
+
+    # Span of the loop in seconds. np.ptp (peak-to-peak = max - min) replaces
+    # the separate max(...)/min(...) calls; cast back to plain int since this
+    # flows into `details`, which gets json.dumps'd by postgres.upsert_risk_flag
+    # (a numpy scalar there would fail to serialize).
+    span_seconds = int(np.ptp(timestamps_arr))
     span_hours = span_seconds / 3600.0
 
     # --- 1. Value score (0.0–1.0) ---
-    # Scale: $1k (floor) → 0.0, $1M+ → 1.0 (log scale)
+    # Scale: $1k (floor) → 0.0, $1M+ → 1.0 (log scale). np.log1p(x) replaces
+    # the manual log(x + 1) — same formula, dedicated stdlib/numpy function.
     _min_cents = max(CYCLE_MIN_VALUE_CENTS, 1)
     _max_cents = 100_000_000  # $1M cap for normalization
-    value_score = min(
+    value_score = float(min(
         1.0,
-        math.log(max(min_hop_cents, _min_cents) / _min_cents + 1)
-        / math.log(_max_cents / _min_cents + 1),
-    )
+        np.log1p(max(min_hop_cents, _min_cents) / _min_cents)
+        / np.log1p(_max_cents / _min_cents),
+    ))
 
     # --- 2. Velocity score (0.0–1.0, higher = faster = more suspicious) ---
     fast_close_seconds = fast_close_hours * 3600
@@ -111,8 +120,8 @@ def score_cycle(
     if n_hops == 1 or mean_cents == 0:
         consistency_score = 1.0
     else:
-        variance = sum((a - mean_cents) ** 2 for a in amounts) / n_hops
-        cv = math.sqrt(variance) / mean_cents  # coefficient of variation
+        # np.std (population std, ddof=0) replaces the manual variance loop.
+        cv = float(amounts_arr.std() / mean_cents)  # coefficient of variation
         # CV of 0 → score 1.0; CV of 1.0 (high spread) → score 0.0
         consistency_score = max(0.0, 1.0 - cv)
 
@@ -146,7 +155,10 @@ def score_cycle(
     span_display = (
         f"{span_hours:.1f}h" if span_hours < 48 else f"{span_hours/24:.1f}d"
     )
-    consistency_pct = round(consistency_score * 100)
+    # 2 decimal places, not a rounded int: round(x) uses banker's rounding
+    # (round(0.5) == 0), which would silently misreport values landing on a
+    # .5 boundary after scaling to a percentage.
+    consistency_pct = round(consistency_score * 100, 2)
 
     explanation = (
         f"Circular money flow detected across {unique_accounts} accounts "
@@ -346,12 +358,6 @@ async def _run_demo() -> None:
     Usage:
         python -m fraud.cycle_detector
     """
-    import sys
-    sys.path.insert(0, str(__import__("pathlib").Path(__file__).parent.parent))
-
-    from db.neo4j import Neo4jClient
-    from db.postgres import PostgresClient
-
     logging.basicConfig(level=logging.INFO)
 
     neo4j_client = Neo4jClient()
@@ -362,7 +368,6 @@ async def _run_demo() -> None:
     await neo4j_client.init_constraints()
 
     # Run the migration so risk_flags table exists
-    import pathlib
     migration_sql = (
         pathlib.Path(__file__).parent.parent
         / "migrations"

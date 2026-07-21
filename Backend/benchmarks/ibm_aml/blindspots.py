@@ -23,9 +23,12 @@ from __future__ import annotations
 
 import json
 import logging
-from dataclasses import dataclass, field, asdict
-from datetime import datetime, timezone
+from dataclasses import dataclass, asdict
+from datetime import datetime, timedelta, timezone
 from typing import Optional
+
+import numpy as np
+import pandas as pd
 
 from benchmarks.ibm_aml.patterns import CycleGroup, _parse_ts
 from config import (
@@ -125,18 +128,23 @@ def _attribute_miss(group: CycleGroup, now_epoch: int) -> str:
     We simulate the filter logic from find_cycles and the Python post-processing
     using only the metadata already in CycleGroup (no live Neo4j call needed).
     """
-    window_start = now_epoch - int(CYCLE_WINDOW_HOURS * 3600)
-    max_hop_gap_s = int(CYCLE_MAX_HOP_GAP_HOURS * 3600)
+    window_start = datetime.fromtimestamp(now_epoch, tz=timezone.utc) - timedelta(
+        hours=CYCLE_WINDOW_HOURS
+    )
+    max_hop_gap = timedelta(hours=CYCLE_MAX_HOP_GAP_HOURS)
 
-    # Reconstruct ordered timestamps from raw_rows (best effort)
-    timestamps: list[float] = []
+    # Reconstruct ordered timestamps from raw_rows (best effort). Kept as
+    # datetime objects (not raw floats) end to end — comparisons below read
+    # as "is this hop older than the window" / "is this gap too wide", not
+    # arithmetic on opaque epoch numbers.
+    timestamps: list[datetime] = []
     amounts: list[int] = []
     currencies: list[str] = []
 
     for row in group.raw_rows:
         ts = _parse_ts(row.get("Timestamp", ""))
         if ts:
-            timestamps.append(ts.timestamp())
+            timestamps.append(ts)
         try:
             amounts.append(round(float(row.get("Amount Paid", "0")) * 100))
         except ValueError:
@@ -149,27 +157,30 @@ def _attribute_miss(group: CycleGroup, now_epoch: int) -> str:
     if timestamps and min(timestamps) < window_start:
         return "OUTSIDE_WINDOW"
 
-    # 2. HOP_GAP — any consecutive pair more than MAX_HOP_GAP apart
-    for i in range(len(timestamps) - 1):
-        if timestamps[i + 1] - timestamps[i] > max_hop_gap_s:
+    # 2. HOP_GAP — any consecutive pair more than MAX_HOP_GAP apart. A cycle
+    # group is bounded by CYCLE_MAX_DEPTH (a handful of hops), so this is a
+    # few comparisons — not the kind of scale a DataFrame/array conversion
+    # would pay off on; zip-over-pairs is the plain, allocation-free version.
+    for prev_ts, curr_ts in zip(timestamps, timestamps[1:]):
+        if curr_ts - prev_ts > max_hop_gap:
             return "HOP_GAP"
 
     # 3. AMOUNT_FLOOR — weakest hop below the floor
-    if amounts and min(amounts) < CYCLE_MIN_VALUE_CENTS:
+    if amounts and np.min(amounts) < CYCLE_MIN_VALUE_CENTS:
         return "AMOUNT_FLOOR"
 
     # 4. CONSERVATION — any hop's amount grows OR bleeds >MAX_LEAK
-    # (compare sorted amounts as a proxy; raw ordering not available here)
+    # (compare sorted amounts as a proxy; raw ordering not available here).
+    # Only whether ANY pair violates matters (not which one), so this is a
+    # single vectorized "any" check instead of a manual break-on-first loop.
     if len(amounts) >= 2:
-        sorted_amts = sorted(amounts, reverse=True)
-        for i in range(len(sorted_amts) - 1):
-            prev, curr = sorted_amts[i], sorted_amts[i + 1]
-            if prev == 0:
-                continue
-            if curr > prev:
-                return "CONSERVATION"
-            if curr < prev * (1.0 - CYCLE_MAX_LEAK):
-                return "CONSERVATION"
+        sorted_amts = np.sort(amounts)[::-1]
+        prev, curr = sorted_amts[:-1], sorted_amts[1:]
+        nonzero_prev = prev != 0
+        grew = curr > prev
+        bled_too_much = curr < prev * (1.0 - CYCLE_MAX_LEAK)
+        if np.any(nonzero_prev & (grew | bled_too_much)):
+            return "CONSERVATION"
 
     # 5. CROSS_CURRENCY — cycle uses multiple currencies
     if group.is_cross_currency:
@@ -206,23 +217,30 @@ def analyze_misses(
     if now_epoch is None:
         now_epoch = int(datetime.now(timezone.utc).timestamp())
 
-    breakdown: dict[str, int] = {c: 0 for c in MISS_CAUSES}
-    detailed: list[MissedGroup] = []
+    causes = [_attribute_miss(group, now_epoch) for group in missed_groups]
+    # value_counts does the same job as a manual "count per cause" loop;
+    # reindex fills in the causes that had zero misses (value_counts only
+    # returns causes that actually occurred).
+    breakdown: dict[str, int] = (
+        pd.Series(causes, dtype="object")
+        .value_counts()
+        .reindex(MISS_CAUSES, fill_value=0)
+        .astype(int)
+        .to_dict()
+    )
 
-    for group in missed_groups:
-        cause = _attribute_miss(group, now_epoch)
-        breakdown[cause] += 1
-        detailed.append(
-            MissedGroup(
-                group_id=group.group_id,
-                n_hops=group.n_hops,
-                min_amount_cents=group.min_amount_cents,
-                span_seconds=group.span_seconds,
-                is_cross_currency=group.is_cross_currency,
-                currencies=sorted(group.currencies),
-                cause=cause,
-            )
+    detailed: list[MissedGroup] = [
+        MissedGroup(
+            group_id=group.group_id,
+            n_hops=group.n_hops,
+            min_amount_cents=group.min_amount_cents,
+            span_seconds=group.span_seconds,
+            is_cross_currency=group.is_cross_currency,
+            currencies=sorted(group.currencies),
+            cause=cause,
         )
+        for group, cause in zip(missed_groups, causes)
+    ]
 
     fn = len(missed_groups)
     tp = true_positives
