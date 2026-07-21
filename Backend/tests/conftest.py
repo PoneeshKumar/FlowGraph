@@ -41,6 +41,7 @@ def sample_card_auth_event() -> Dict[str, Any]:
         "receiver_id": "merchant_hash_456",
         "amount_cents": 5000,
         "currency": "USD",
+        "amount_usd_cents": 5000,
         "timestamp_utc": datetime.now(timezone.utc).isoformat(),
         "raw_payload": {
             "authorization_code": "ABC123",
@@ -69,6 +70,7 @@ def sample_card_settlement_event() -> Dict[str, Any]:
         "receiver_id": "merchant_hash_456",
         "amount_cents": 5000,
         "currency": "USD",
+        "amount_usd_cents": 5000,
         "timestamp_utc": datetime.now(timezone.utc).isoformat(),
         "raw_payload": {
             "authorization_code": "ABC123",

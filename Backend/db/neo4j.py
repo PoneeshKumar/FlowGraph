@@ -36,6 +36,9 @@ from config import (
     CYCLE_CONSERVATION_MODE,
     CYCLE_MAX_CYCLE_LEAK,
     CYCLE_QUERY_TIMEOUT_SECONDS,
+    LOUVAIN_WINDOW_DAYS,
+    LOUVAIN_EXPORT_TIMEOUT_SECONDS,
+    LOUVAIN_ASSIGN_BATCH_SIZE,
 )
 
 logger = logging.getLogger(__name__)
@@ -360,6 +363,115 @@ class Neo4jClient:
                 )
                 return []
             logger.error(f"Failed to find cycles for {account_id}: {e}")
+            raise
+
+    async def export_flows_to_edges(
+        self,
+        window_days: int = LOUVAIN_WINDOW_DAYS,
+        reference_time: Optional[datetime] = None,
+        query_timeout_seconds: float = LOUVAIN_EXPORT_TIMEOUT_SECONDS,
+    ) -> List[Dict[str, Any]]:
+        """
+        Export the aggregate FLOWS_TO edge list for community detection.
+
+        Returns one record per directed account pair whose relationship was
+        active (last_ts) within the window. The Louvain batch collapses the
+        two directions Python-side (build_undirected_graph); exporting raw
+        directed records keeps this query a trivial scan.
+
+        Args:
+            window_days:    Only edges with last_ts within this many days
+            reference_time: Window anchor; defaults to now (benchmarks anchor
+                            to the dataset's own max timestamp instead)
+
+        Returns:
+            List of dicts: {src, dst, total_amount, tx_count}
+        """
+        ref = reference_time if reference_time is not None else datetime.now(timezone.utc)
+        window_start_epoch = int(ref.timestamp()) - window_days * 86400
+
+        query = """
+        MATCH (a:Account)-[f:FLOWS_TO]->(b:Account)
+        WHERE f.last_ts >= $window_start_epoch
+        RETURN a.id AS src, b.id AS dst,
+               f.total_amount AS total_amount, f.tx_count AS tx_count
+        """
+        # Batch export may legitimately take longer than the per-account cycle
+        # budget, but must still be bounded — an unindexed runaway scan cannot
+        # be allowed to hang the batch forever.
+        timed_query = Query(query, timeout=query_timeout_seconds)
+
+        try:
+            async with self.driver.session(database=NEO4J_DATABASE) as session:
+                result = await session.run(
+                    timed_query, window_start_epoch=window_start_epoch
+                )
+                return [
+                    {
+                        "src":          record["src"],
+                        "dst":          record["dst"],
+                        "total_amount": record["total_amount"],
+                        "tx_count":     record["tx_count"],
+                    }
+                    async for record in result
+                ]
+        except Exception as e:
+            logger.error(f"Failed to export FLOWS_TO edges: {e}")
+            raise
+
+    async def write_community_assignments(
+        self,
+        assignments: Dict[str, str],
+        detected_at_epoch: int,
+        batch_size: int = LOUVAIN_ASSIGN_BATCH_SIZE,
+    ) -> int:
+        """
+        Batch-write community membership onto Account nodes.
+
+        Sets community_id / community_detected_at as node properties. This is
+        derived analytical state, NOT payment data — the outbox convention
+        (Postgres first, then graph) applies to payment events; batch algorithm
+        results are written directly, with detected_at recording provenance.
+        MATCH (not MERGE) is deliberate: an account absent from the graph was
+        deleted since export, and resurrecting it here would be wrong.
+
+        Args:
+            assignments:       account_id → community_id (12-hex-char string)
+            detected_at_epoch: Run anchor time, unix seconds UTC
+
+        Returns:
+            Number of assignment rows written
+        """
+        if not assignments:
+            return 0
+
+        rows = [{"id": account_id, "cid": community_id}
+                for account_id, community_id in assignments.items()]
+
+        query = """
+        UNWIND $rows AS row
+        MATCH (a:Account {id: row.id})
+        SET a.community_id = row.cid,
+            a.community_detected_at = $detected_at
+        """
+
+        written = 0
+        try:
+            async with self.driver.session(database=NEO4J_DATABASE) as session:
+                for i in range(0, len(rows), batch_size):
+                    batch = rows[i:i + batch_size]
+                    result = await session.run(
+                        query, rows=batch, detected_at=detected_at_epoch
+                    )
+                    await result.consume()
+                    written += len(batch)
+            logger.info(
+                "Community assignments written | accounts=%d communities=%d",
+                written, len(set(assignments.values())),
+            )
+            return written
+        except Exception as e:
+            logger.error(f"Failed to write community assignments: {e}")
             raise
 
     async def create_account_node(

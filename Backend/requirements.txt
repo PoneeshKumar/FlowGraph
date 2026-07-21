@@ -13,9 +13,19 @@ asyncpg==0.29.0
 neo4j==5.21.0
 redis==5.0.4
 
-# Numeric/array ops for cycle scoring and IBM AML benchmark analysis
-numpy==2.0.2
+# Graph algorithms (Louvain community detection)
+# networkx 3.2.1 is the last release supporting Python 3.9 — do not bump without a Python upgrade
+networkx==3.2.1
+
+# Vectorized edge aggregation (directed FLOWS_TO -> undirected graph merge)
 pandas==2.3.3
+numpy==2.0.2
+
+# Optional Leiden community-detection engine (LOUVAIN_ENGINE=leiden).
+# PyPI package is `igraph` (NOT the deprecated `python-igraph`). Both are
+# GPL-3.0 — the default engine stays networkx so this stays opt-in.
+igraph==1.0.0
+leidenalg==0.12.0
 
 # Web framework (included with Faust but explicit for clarity)
 aiohttp==3.10.1
