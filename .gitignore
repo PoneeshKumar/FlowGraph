@@ -42,3 +42,6 @@ Backend/benchmarks/results/
 # Generated dev visualiser output
 Backend/flowgraph_graph.html
 Backend/viz_shot.png
+data/
+*.zip
+*.csv
