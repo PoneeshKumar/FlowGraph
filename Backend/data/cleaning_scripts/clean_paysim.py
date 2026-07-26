@@ -35,18 +35,14 @@ avg_amount_transaction_per_type = paysim_df.groupby("type").mean().reset_index()
 avg_amount_transaction_per_type_per_step = paysim_df.groupby(["type", "step"]).mean().reset_index()
 avg_amount_transaction_per_type_per_step_per_originator = paysim_df.groupby(["type", "step", "nameOrig"]).mean().reset_index()
 avg_amount_transaction_per_type_per_step_per_destination = paysim_df.groupby(["type", "step", "nameDest"]).mean().reset_index()
-avg_amount_transaction_per_type_per_step_per_destination_per_fraud_flag = paysim_df.groupby(["type", "step", "nameDest", "isFraud"]).mean().reset_index()
-avg_amount_transaction_per_type_per_step_per_destination_per_fraud_flag_per_flagged_fraud = paysim_df.groupby(["type", "step", "nameDest", "isFraud", "isFlaggedFraud"]).mean().reset_index()
-avg_amount_transaction_per_type_per_step_per_destination_per_fraud_flag_per_flagged_fraud_per_old_balance_originator = paysim_df.groupby(["type", "step", "nameDest", "isFraud", "isFlaggedFraud", "oldbalanceOrg"]).mean().reset_index()
+avg_amount_transaction_per_type_per_step_per_destination_per_old_balance_originator = paysim_df.groupby(["type", "step", "nameDest", "oldbalanceOrg"]).mean().reset_index()
 
 
 paysim_df = paysim_df.merge(avg_amount_transaction_per_type, on="type", suffixes=("", "_avg_amount_per_type"))
 paysim_df = paysim_df.merge(avg_amount_transaction_per_type_per_step, on=["type", "step"], suffixes=("", "_avg_amount_per_type_per_step"))
 paysim_df = paysim_df.merge(avg_amount_transaction_per_type_per_step_per_originator, on=["type", "step", "nameOrig"], suffixes=("", "_avg_amount_per_type_per_step_per_originator"))
 paysim_df = paysim_df.merge(avg_amount_transaction_per_type_per_step_per_destination, on=["type", "step", "nameDest"], suffixes=("", "_avg_amount_per_type_per_step_per_destination"))
-paysim_df = paysim_df.merge(avg_amount_transaction_per_type_per_step_per_destination_per_fraud_flag, on=["type", "step", "nameDest", "isFraud"], suffixes=("", "_avg_amount_per_type_per_step_per_destination_per_fraud_flag"))
-paysim_df = paysim_df.merge(avg_amount_transaction_per_type_per_step_per_destination_per_fraud_flag_per_flagged_fraud, on=["type", "step", "nameDest", "isFraud", "isFlaggedFraud"], suffixes=("", "_avg_amount_per_type_per_step_per_destination_per_fraud_flag_per_flagged_fraud"))
-paysim_df = paysim_df.merge(avg_amount_transaction_per_type_per_step_per_destination_per_fraud_flag_per_flagged_fraud_per_old_balance_originator, on=["type", "step", "nameDest", "isFraud", "isFlaggedFraud", "oldbalanceOrg"], suffixes=("", "_avg_amount_per_type_per_step_per_destination_per_fraud_flag_per_flagged_fraud_per_old_balance_originator"))
+paysim_df = paysim_df.merge(avg_amount_transaction_per_type_per_step_per_destination_per_old_balance_originator, on=["type", "step", "nameDest", "oldbalanceOrg"], suffixes=("", "_avg_amount_per_type_per_step_per_destination_per_old_balance_originator"))
 
 #. now we want to transform the dataframe into a .pt file to be used for training
 
