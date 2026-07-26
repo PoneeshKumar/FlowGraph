@@ -45,3 +45,7 @@ Backend/viz_shot.png
 data/
 *.zip
 *.csv
+
+# Markdown files
+*.md
+*.MD
