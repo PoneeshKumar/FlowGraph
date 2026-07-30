@@ -332,6 +332,45 @@ class TestRecomputePageRankFull:
         write_calls = [c for c in calls if "pagerank_score" in c[0]]
         assert len(write_calls) == 3
 
+    async def test_export_timeout_is_far_above_the_louvain_default(self):
+        """Regression: the whole-graph export must not inherit the 120s budget.
+
+        export_flows_to_edges defaults to LOUVAIN_EXPORT_TIMEOUT_SECONDS (120s),
+        sized for the Louvain window. On the real HI-Small load, exporting
+        1,010,384 FLOWS_TO edges blew through it and killed the run AFTER all
+        5.08M rows had already been written.
+        """
+        from config import LOUVAIN_EXPORT_TIMEOUT_SECONDS
+
+        captured: Dict[str, Any] = {}
+        client = _client([], records=[])
+
+        async def fake_export(**kwargs):
+            captured.update(kwargs)
+            return []
+
+        client.export_flows_to_edges = fake_export
+        await client.recompute_pagerank_full()
+
+        assert "query_timeout_seconds" in captured, (
+            "recompute_pagerank_full must pass its own export timeout"
+        )
+        assert captured["query_timeout_seconds"] > LOUVAIN_EXPORT_TIMEOUT_SECONDS
+        assert captured["query_timeout_seconds"] >= 600
+
+    async def test_export_timeout_is_overridable(self):
+        captured: Dict[str, Any] = {}
+        client = _client([], records=[])
+
+        async def fake_export(**kwargs):
+            captured.update(kwargs)
+            return []
+
+        client.export_flows_to_edges = fake_export
+        await client.recompute_pagerank_full(export_timeout_seconds=42.0)
+
+        assert captured["query_timeout_seconds"] == 42.0
+
     async def test_no_edges_writes_nothing(self):
         calls: List[tuple] = []
         client = _client(calls, records=[])

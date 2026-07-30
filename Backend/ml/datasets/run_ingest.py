@@ -68,6 +68,18 @@ def _parse_args() -> argparse.Namespace:
         action="store_true",
         help="DELETE the existing graph and flush Redis before loading",
     )
+    parser.add_argument(
+        "--pagerank-only",
+        action="store_true",
+        help="skip ingestion; only run the full-graph PageRank pass over the "
+             "graph already loaded (use after an ingest whose PageRank step failed)",
+    )
+    parser.add_argument(
+        "--export-timeout",
+        type=float,
+        default=1800.0,
+        help="seconds allowed for the FLOWS_TO edge export during PageRank",
+    )
     return parser.parse_args()
 
 
@@ -134,6 +146,28 @@ async def _main() -> int:
         await redis_client.initialize()
 
     try:
+        if args.pagerank_only:
+            # Recover path: the data is already in the graph, only the scores
+            # are missing. Re-ingesting 5M rows to fix that would be absurd —
+            # and with --reset it would also wipe what succeeded.
+            started = time.monotonic()
+            # window_days is deliberately absurd rather than anchored to the
+            # dataset: export_flows_to_edges returns only src/dst/total_amount/
+            # tx_count, never last_ts, so there is no way to derive the dataset's
+            # own end from here. A 100,000-day window starts in the 1700s, which
+            # includes every edge regardless of where "now" sits — so the anchor
+            # cannot matter.
+            logger.info("PageRank-only pass (window=100000d, includes all edges)")
+            written = await neo4j_client.recompute_pagerank_full(
+                window_days=100_000,
+                export_timeout_seconds=args.export_timeout,
+            )
+            print(
+                f"\nPageRank written for {written:,} accounts "
+                f"in {time.monotonic() - started:.1f}s"
+            )
+            return 0
+
         if args.reset:
             await _reset_stores(neo4j_client, redis_client)
 

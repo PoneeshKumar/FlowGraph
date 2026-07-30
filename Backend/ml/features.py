@@ -156,6 +156,7 @@ class FeatureBuilder:
         windows_hours: Sequence[int] = (1, 24, 168),
         reference_time: Optional[datetime] = None,
         flag_limit: int = 100_000,
+        export_timeout_seconds: float = 1800.0,
     ) -> FeatureSet:
         """Pull from every store and assemble the graph.
 
@@ -168,12 +169,24 @@ class FeatureBuilder:
             flag_limit:     Cap on risk_flags read for labels. The default is
                             deliberately far above get_risk_flags' own 100, so
                             labels are not silently truncated.
+            export_timeout_seconds:
+                            Timeout for both Neo4j exports. Must far exceed
+                            LOUVAIN_EXPORT_TIMEOUT_SECONDS (120s), which both
+                            export methods default to: that budget is sized for
+                            the Louvain window, not a whole graph. Measured on
+                            the loaded HI-Small graph, 513,987 nodes and
+                            1,010,384 edges take well over two minutes to
+                            stream, so the default would abort every build.
         """
         ref = reference_time if reference_time is not None else datetime.now(timezone.utc)
 
-        nodes = await self.neo4j.export_account_nodes()
+        nodes = await self.neo4j.export_account_nodes(
+            query_timeout_seconds=export_timeout_seconds
+        )
         edges = await self.neo4j.export_flows_to_edges(
-            window_days=window_days, reference_time=ref
+            window_days=window_days,
+            reference_time=ref,
+            query_timeout_seconds=export_timeout_seconds,
         )
 
         volumes: Dict[str, Dict[str, float]] = {}

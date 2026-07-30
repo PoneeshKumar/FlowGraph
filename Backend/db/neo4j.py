@@ -546,6 +546,7 @@ class Neo4jClient:
         write_batch_size: int = 10_000,
         damping: float = 0.85,
         max_iterations: int = 100,
+        export_timeout_seconds: float = 1800.0,
     ) -> int:
         """
         Recompute PageRank across the whole graph and persist every score.
@@ -566,6 +567,15 @@ class Neo4jClient:
                               datasets should anchor to their own max ts, or
                               every edge looks stale.
             write_batch_size: Accounts per score-write round trip.
+            export_timeout_seconds:
+                              Timeout for the edge export. Must be far larger
+                              than LOUVAIN_EXPORT_TIMEOUT_SECONDS (120s), which
+                              export_flows_to_edges defaults to: that budget is
+                              sized for the Louvain window, and a whole-graph
+                              export blows straight through it. Observed on the
+                              HI-Small load — 1,010,384 FLOWS_TO edges timed out
+                              at 120s and killed the run after the data had
+                              already been written.
 
         Returns:
             Number of accounts whose score was written.
@@ -577,7 +587,9 @@ class Neo4jClient:
         from algorithms.pagerank import compute_pagerank_sparse
 
         edges = await self.export_flows_to_edges(
-            window_days=window_days, reference_time=reference_time
+            window_days=window_days,
+            reference_time=reference_time,
+            query_timeout_seconds=export_timeout_seconds,
         )
         if not edges:
             logger.warning("No FLOWS_TO edges in window; nothing to score")
