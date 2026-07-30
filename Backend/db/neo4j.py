@@ -15,7 +15,7 @@ Edge model:
 
 import logging
 from datetime import datetime, timezone
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Sequence
 
 from neo4j import AsyncGraphDatabase, AsyncDriver, AsyncSession, Query
 from neo4j.exceptions import ServiceUnavailable
@@ -418,6 +418,210 @@ class Neo4jClient:
         except Exception as e:
             logger.error(f"Failed to export FLOWS_TO edges: {e}")
             raise
+
+    async def bulk_upsert_transactions(
+        self,
+        transactions: Sequence[Dict[str, Any]],
+        batch_size: int = 1000,
+    ) -> int:
+        """
+        Batched UNWIND write of many transactions — for dataset ingestion only.
+
+        The streaming path (upsert_transaction_graph) issues one Cypher round
+        trip per payment AND recomputes local PageRank per payment, which is
+        roughly three round trips each. That is correct for a live stream and
+        hopeless for bulk: 5M rows would be ~15M queries. This writes
+        batch_size rows per round trip and skips PageRank entirely — call
+        recompute_pagerank_full() once after the load instead.
+
+        Graph semantics are identical to upsert_transaction_graph: TRANSFER
+        MERGEd on txn_id, FLOWS_TO MERGEd on the account pair with aggregates
+        incremented. UNWIND rows are applied in order within one transaction and
+        MERGE sees earlier writes from the same transaction, so repeated account
+        pairs inside a batch accumulate correctly rather than overwriting.
+
+        Rows sharing a transaction_id are deduplicated within each batch.
+        txn_id is the declared idempotency key, so two rows carrying the same
+        one are the same payment: TRANSFER would MERGE to a single edge anyway,
+        while FLOWS_TO aggregates would double-count without this. Dedup is
+        per-batch only — a repeat that straddles two batches still inflates the
+        aggregates, as it would on the streaming path.
+
+        Args:
+            transactions: Dicts with sender_id, receiver_id, amount_cents,
+                          timestamp_utc (datetime or unix seconds), rail,
+                          event_type, transaction_id.
+            batch_size:   Rows per round trip.
+
+        Returns:
+            Count of rows actually written after dedup.
+        """
+        if not self.driver:
+            logger.debug("Neo4j driver not initialized; skipping bulk upsert")
+            return 0
+        if not transactions:
+            return 0
+        if batch_size < 1:
+            raise ValueError(f"batch_size must be >= 1, got {batch_size}")
+
+        query = """
+        UNWIND $rows AS row
+        MERGE (src:Account {id: row.sender_id})
+          ON CREATE SET src.created_at = timestamp()
+        MERGE (dst:Account {id: row.receiver_id})
+          ON CREATE SET dst.created_at = timestamp()
+        MERGE (src)-[t:TRANSFER {txn_id: row.transaction_id}]->(dst)
+          ON CREATE SET
+            t.amount_cents = row.amount_cents,
+            t.ts           = row.timestamp_utc,
+            t.rail         = row.rail,
+            t.event_type   = row.event_type,
+            t.created_at   = timestamp()
+        MERGE (src)-[f:FLOWS_TO]->(dst)
+          ON CREATE SET
+            f.tx_count     = 1,
+            f.total_amount = row.amount_cents,
+            f.first_ts     = row.timestamp_utc,
+            f.last_ts      = row.timestamp_utc,
+            f.min_amount   = row.amount_cents,
+            f.max_amount   = row.amount_cents,
+            f.rail         = row.rail
+          ON MATCH SET
+            f.tx_count     = f.tx_count + 1,
+            f.total_amount = f.total_amount + row.amount_cents,
+            f.first_ts     = CASE WHEN row.timestamp_utc < f.first_ts THEN row.timestamp_utc ELSE f.first_ts END,
+            f.last_ts      = CASE WHEN row.timestamp_utc > f.last_ts  THEN row.timestamp_utc ELSE f.last_ts END,
+            f.min_amount   = CASE WHEN row.amount_cents < f.min_amount THEN row.amount_cents ELSE f.min_amount END,
+            f.max_amount   = CASE WHEN row.amount_cents > f.max_amount THEN row.amount_cents ELSE f.max_amount END
+        """
+
+        written = 0
+        for start in range(0, len(transactions), batch_size):
+            chunk = transactions[start : start + batch_size]
+
+            seen: set = set()
+            rows: List[Dict[str, Any]] = []
+            for txn in chunk:
+                txn_id = txn["transaction_id"]
+                if txn_id in seen:
+                    continue
+                seen.add(txn_id)
+
+                timestamp = txn["timestamp_utc"]
+                if isinstance(timestamp, datetime):
+                    timestamp = int(timestamp.timestamp())
+
+                rows.append(
+                    {
+                        "sender_id": txn["sender_id"],
+                        "receiver_id": txn["receiver_id"],
+                        "amount_cents": int(txn["amount_cents"]),
+                        "timestamp_utc": int(timestamp),
+                        "rail": txn["rail"],
+                        "event_type": txn["event_type"],
+                        "transaction_id": txn_id,
+                    }
+                )
+
+            if not rows:
+                continue
+
+            try:
+                async with self.driver.session(database=NEO4J_DATABASE) as session:
+                    await session.run(query, rows=rows)
+                written += len(rows)
+            except Exception as e:
+                logger.error(
+                    f"Bulk upsert failed on batch at offset {start}: {e}"
+                )
+                raise
+
+        logger.info(f"Bulk upsert wrote {written} transactions")
+        return written
+
+    async def recompute_pagerank_full(
+        self,
+        window_days: int = 365,
+        reference_time: Optional[datetime] = None,
+        write_batch_size: int = 10_000,
+        damping: float = 0.85,
+        max_iterations: int = 100,
+    ) -> int:
+        """
+        Recompute PageRank across the whole graph and persist every score.
+
+        The counterpart to bulk_upsert_transactions, which skips the
+        per-transaction PageRank the streaming path does. Run this once after a
+        dataset load.
+
+        Uses compute_pagerank_sparse, not compute_weighted_pagerank: the latter
+        allocates a dense node_count^2 matrix and cannot survive a real graph
+        (515k accounts would need ~2.1 PB).
+
+        Args:
+            window_days:      Only FLOWS_TO edges active within this window.
+                              Defaults to a year so a whole dataset is covered,
+                              unlike the Louvain default.
+            reference_time:   Window anchor; defaults to now. Historical
+                              datasets should anchor to their own max ts, or
+                              every edge looks stale.
+            write_batch_size: Accounts per score-write round trip.
+
+        Returns:
+            Number of accounts whose score was written.
+        """
+        if not self.driver:
+            logger.debug("Neo4j driver not initialized; skipping PageRank recompute")
+            return 0
+
+        from algorithms.pagerank import compute_pagerank_sparse
+
+        edges = await self.export_flows_to_edges(
+            window_days=window_days, reference_time=reference_time
+        )
+        if not edges:
+            logger.warning("No FLOWS_TO edges in window; nothing to score")
+            return 0
+
+        scores = compute_pagerank_sparse(
+            (
+                (e["src"], e["dst"], float(e.get("total_amount") or 0.0))
+                for e in edges
+            ),
+            damping=damping,
+            max_iterations=max_iterations,
+        )
+        if not scores:
+            return 0
+
+        update_query = """
+        UNWIND $updates AS update
+        MATCH (n:Account {id: update.account_id})
+        SET n.pagerank_score = update.score,
+            n.pagerank_updated_at = timestamp()
+        """
+
+        updates = [
+            {"account_id": account_id, "score": round(score, 10)}
+            for account_id, score in sorted(scores.items())
+        ]
+
+        written = 0
+        for start in range(0, len(updates), write_batch_size):
+            chunk = updates[start : start + write_batch_size]
+            try:
+                async with self.driver.session(database=NEO4J_DATABASE) as session:
+                    await session.run(update_query, updates=chunk)
+                written += len(chunk)
+            except Exception as e:
+                logger.error(f"PageRank write failed at offset {start}: {e}")
+                raise
+
+        logger.info(
+            f"PageRank recomputed over {len(edges)} edges, "
+            f"{written} account scores written"
+        )
+        return written
 
     async def export_account_nodes(
         self,
