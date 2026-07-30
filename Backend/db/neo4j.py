@@ -635,6 +635,64 @@ class Neo4jClient:
         )
         return written
 
+    async def get_flows_to_timestamp(
+        self, percentile: float = 1.0
+    ) -> Optional[int]:
+        """
+        A FLOWS_TO.last_ts quantile, as unix seconds — for anchoring time windows.
+
+        Needed because the data is historical. IBM AML is from 2022, so anchoring
+        the Redis 1h/24h/7d windows at wall-clock now makes every ZRANGEBYSCORE
+        match nothing and silently zeroes 12 of the 29 feature columns.
+
+        percentile defaults below 1.0 for a reason. The absolute max is often a
+        near-empty tail: measured on HI-Small, 2022-09-01..09-10 holds 5,076,237
+        transactions and 09-11..09-18 holds 1,108. Anchoring at the max (09-18)
+        put only 533 of 513,987 accounts inside the 7-day window. A high
+        quantile lands where the data actually is.
+
+        A dedicated aggregation rather than reading it off export_flows_to_edges,
+        which returns only src/dst/total_amount/tx_count — and which would mean
+        streaming a million rows to learn one number.
+
+        Args:
+            percentile: 1.0 for the true max, or a quantile in (0, 1) — 0.999
+                        skips a sparse tail without moving materially into the
+                        bulk of the data.
+
+        Returns:
+            Unix seconds, or None on an empty graph.
+        """
+        if not self.driver:
+            return None
+        if not 0.0 < percentile <= 1.0:
+            raise ValueError(f"percentile must be in (0, 1], got {percentile}")
+
+        if percentile >= 1.0:
+            query = """
+            MATCH ()-[f:FLOWS_TO]->()
+            RETURN max(f.last_ts) AS max_ts
+            """
+        else:
+            query = """
+            MATCH ()-[f:FLOWS_TO]->()
+            RETURN percentileDisc(f.last_ts, $percentile) AS max_ts
+            """
+        try:
+            async with self.driver.session(database=NEO4J_DATABASE) as session:
+                if percentile >= 1.0:
+                    result = await session.run(query)
+                else:
+                    result = await session.run(query, percentile=percentile)
+                record = await result.single()
+        except Exception as e:
+            logger.error(f"Failed to read FLOWS_TO timestamp quantile: {e}")
+            raise
+
+        if not record or record["max_ts"] is None:
+            return None
+        return int(record["max_ts"])
+
     async def export_account_nodes(
         self,
         query_timeout_seconds: float = LOUVAIN_EXPORT_TIMEOUT_SECONDS,

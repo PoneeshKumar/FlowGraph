@@ -31,6 +31,15 @@ def _parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--window-days", type=int, default=400)
     parser.add_argument(
+        "--anchor-percentile",
+        type=float,
+        default=0.999,
+        help="quantile of FLOWS_TO.last_ts to anchor the Redis windows at. "
+             "Below 1.0 by default: the true max is often a near-empty tail "
+             "(HI-Small has 1,108 of 5,078,345 transactions after 09-10), and "
+             "anchoring there leaves the windows almost entirely zero.",
+    )
+    parser.add_argument(
         "--patterns",
         default="benchmarks/data/HI-Small_Patterns.txt",
         help="IBM AML ground-truth file",
@@ -79,12 +88,27 @@ async def _main() -> int:
     try:
         builder = FeatureBuilder(neo4j_client, redis_client, postgres_client)
 
-        # The data is historical (IBM AML is 2022), so a now-anchored window
-        # would treat every edge as stale and return an empty graph. Rather than
-        # probe for the dataset's end — export_flows_to_edges returns only
-        # src/dst/total_amount/tx_count, never last_ts, so it cannot be derived
-        # from there — just make the window wide enough to cover any dataset.
+        # Anchor to the dataset's own latest edge, not wall-clock now. This is
+        # not cosmetic: the Redis windows are 1h/24h/7d wide, so on 2022 data a
+        # now-anchored window matches nothing and silently zeroes 12 of the 29
+        # feature columns.
+        from datetime import datetime, timezone
+
         reference = None
+        max_ts = await neo4j_client.get_flows_to_timestamp(
+            percentile=args.anchor_percentile
+        )
+        if max_ts:
+            reference = datetime.fromtimestamp(max_ts, tz=timezone.utc)
+            logger.info(
+                "Anchoring windows at p%.4g of last_ts: %s",
+                args.anchor_percentile * 100,
+                reference,
+            )
+        else:
+            logger.warning("No FLOWS_TO timestamps found — falling back to now")
+
+        # Wide enough to cover any dataset's own span once anchored.
         window_days = max(args.window_days, 2_000)
 
         feature_set = await builder.build(

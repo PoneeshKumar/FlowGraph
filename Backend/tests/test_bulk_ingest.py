@@ -381,3 +381,44 @@ class TestRecomputePageRankFull:
     async def test_without_driver_returns_zero(self):
         client = Neo4jClient()
         assert await client.recompute_pagerank_full() == 0
+
+
+@pytest.mark.asyncio
+class TestMaxFlowsToTimestamp:
+    """Anchoring time windows on historical data depends on this."""
+
+    async def _client_returning(self, record):
+        class Result:
+            async def single(self):
+                return record
+
+        class Session:
+            async def __aenter__(self):
+                return self
+
+            async def __aexit__(self, exc_type, exc, tb):
+                return False
+
+            async def run(self, query, **kwargs):
+                Session.last_query = query
+                return Result()
+
+        client = Neo4jClient()
+        client.driver = FakeDriver(Session())
+        return client, Session
+
+    async def test_returns_the_max_timestamp(self):
+        client, session = await self._client_returning({"max_ts": 1_663_459_200})
+        assert await client.get_flows_to_timestamp() == 1_663_459_200
+        assert "max(f.last_ts)" in session.last_query
+
+    async def test_empty_graph_returns_none(self):
+        client, _ = await self._client_returning({"max_ts": None})
+        assert await client.get_flows_to_timestamp() is None
+
+    async def test_no_record_returns_none(self):
+        client, _ = await self._client_returning(None)
+        assert await client.get_flows_to_timestamp() is None
+
+    async def test_without_driver_returns_none(self):
+        assert await Neo4jClient().get_flows_to_timestamp() is None
