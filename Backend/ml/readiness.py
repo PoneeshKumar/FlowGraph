@@ -232,25 +232,36 @@ def check_structure(report: Report, feature_set: Any) -> None:
 
     out_degree = np.bincount(sources, minlength=num_nodes)
     in_degree = np.bincount(targets, minlength=num_nodes)
-    isolated = int(np.sum((out_degree == 0) & (in_degree == 0)))
     self_loops = int(np.sum(sources == targets))
+
+    # Self-loops must be excluded before judging connectivity. A self-loop gives
+    # a node in-degree 1 AND out-degree 1, so counting raw degree reports a node
+    # that only pays itself as "connected" when message passing can reach
+    # nothing from it. This distinction is not academic on IBM AML: 11.6% of
+    # source rows are same-account transfers.
+    non_self = sources != targets
+    real_out = np.bincount(sources[non_self], minlength=num_nodes)
+    real_in = np.bincount(targets[non_self], minlength=num_nodes)
+    unreachable = int(np.sum((real_out == 0) & (real_in == 0)))
 
     # A duplicate directed pair should be impossible: FLOWS_TO is MERGEd on the
     # pair, so two rows for one pair means the aggregate was split.
     pair_keys = sources.astype(np.int64) * num_nodes + targets.astype(np.int64)
     duplicates = int(len(pair_keys) - len(np.unique(pair_keys)))
 
-    total_degree = out_degree + in_degree
+    real_degree = real_out + real_in
     lines = [
-        f"isolated nodes       : {isolated:,} ({isolated / num_nodes:.2%})",
-        f"self-loops           : {self_loops:,}",
+        f"self-loops           : {self_loops:,} of {len(sources):,} edges "
+        f"({self_loops / max(len(sources), 1):.1%})",
+        f"no non-self neighbour: {unreachable:,} ({unreachable / num_nodes:.2%}) "
+        f"— message passing cannot reach anything for these",
         f"duplicate pairs      : {duplicates:,}",
-        f"degree mean / median : {total_degree.mean():.2f} / "
-        f"{np.median(total_degree):.0f}",
-        f"degree p99 / max     : {np.percentile(total_degree, 99):.0f} / "
-        f"{total_degree.max():,}",
-        f"zero in-degree       : {int(np.sum(in_degree == 0)):,}",
-        f"zero out-degree      : {int(np.sum(out_degree == 0)):,}",
+        f"real degree mean/med : {real_degree.mean():.2f} / "
+        f"{np.median(real_degree):.0f}",
+        f"real degree p99/max  : {np.percentile(real_degree, 99):.0f} / "
+        f"{real_degree.max():,}",
+        f"zero real in-degree  : {int(np.sum(real_in == 0)):,}",
+        f"zero real out-degree : {int(np.sum(real_out == 0)):,}",
     ]
 
     if duplicates:
@@ -260,19 +271,29 @@ def check_structure(report: Report, feature_set: Any) -> None:
             lines,
         )
         return
-    if isolated > num_nodes * 0.5:
+    if unreachable > num_nodes * 0.5:
         report.add(
-            "structure", WARN,
-            f"{isolated / num_nodes:.0%} of nodes are isolated — message passing "
-            f"has nothing to aggregate for them",
+            "structure", FAIL,
+            f"{unreachable / num_nodes:.0%} of nodes have no non-self neighbour — "
+            f"a GNN cannot do better than a per-node model on most of the graph",
             lines,
         )
         return
-    headline = f"connected: {isolated:,} isolated, {self_loops:,} self-loops"
+    if unreachable or self_loops:
+        report.add(
+            "structure", WARN,
+            f"{self_loops:,} self-loops and {unreachable:,} nodes "
+            f"({unreachable / num_nodes:.1%}) with no non-self neighbour",
+            lines + [
+                "consider dropping self-loop edges: SAGEConv already applies its "
+                "own root weight, so a self-loop makes a node aggregate itself "
+                "twice, and it inflates degree/volume features",
+            ],
+        )
+        return
     report.add(
-        "structure",
-        WARN if self_loops else PASS,
-        headline + ("; self-loops let a node aggregate itself twice" if self_loops else ""),
+        "structure", PASS,
+        f"fully connected: no self-loops, no unreachable nodes",
         lines,
     )
 
@@ -473,11 +494,27 @@ def check_time_split(
             lines,
         )
         return
+
+    # The split partitions ACCOUNTS by when they first appear. It does not
+    # separate the feature VALUES in time, because FLOWS_TO aggregates
+    # (tx_count, total_amount, min/max) are incremented on every MERGE and so
+    # span the whole dataset no matter where the cutoff falls. Every account
+    # therefore arrives carrying its complete lifetime, including activity after
+    # the cutoff. That is not label leakage — the label is not in the features —
+    # but it does overstate how EARLY the model would catch a mule in
+    # production, where you only ever have history-to-date.
     report.add(
-        "time split", PASS,
-        f"chronological split works: {train_positives:,}/{test_positives:,} "
-        f"positives train/test",
-        lines,
+        "time split", WARN,
+        f"split works ({train_positives:,}/{test_positives:,} positives) but "
+        f"features are cumulative over the full span, so it separates accounts, "
+        f"not time",
+        lines + [
+            "features aggregate all 18 days regardless of the cutoff: FLOWS_TO "
+            "aggregates are incremented on MERGE and cannot be rewound",
+            "to evaluate honestly, rebuild time-bounded features from TRANSFER.ts "
+            "or the Redis ZSETs (both keep per-transaction time), then train on "
+            "as-of-T features and test on a later window",
+        ],
     )
 
 

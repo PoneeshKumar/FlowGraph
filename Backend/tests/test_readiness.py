@@ -166,14 +166,29 @@ class TestStructure:
         check_structure(report, _feature_set(np.ones((3, 2)), edges))
         assert _status(report, "structure") == WARN
 
-    def test_mostly_isolated_warns(self):
-        # 10 nodes, one edge — 8 nodes touch nothing.
+    def test_self_loop_only_node_counted_as_unreachable(self):
+        """A self-loop gives in-degree 1 AND out-degree 1.
+
+        Counting raw degree therefore calls a node that only pays itself
+        "connected", when message passing can reach nothing from it. Node 2 here
+        has only a self-loop.
+        """
+        edges = np.array([[0, 2], [1, 2]], dtype=np.int64)
+        report = Report()
+        check_structure(report, _feature_set(np.ones((3, 2)), edges))
+
+        assert _status(report, "structure") == WARN
+        detail = " ".join(report.checks[0].lines)
+        assert "no non-self neighbour: 1" in detail
+
+    def test_mostly_unreachable_fails(self):
+        # 10 nodes, one real edge — 8 nodes touch nothing at all.
         edges = np.array([[0], [1]], dtype=np.int64)
         report = Report()
         check_structure(report, _feature_set(np.ones((10, 2)), edges))
 
-        assert _status(report, "structure") == WARN
-        assert any("isolated" in line for line in report.checks[0].lines)
+        assert _status(report, "structure") == FAIL
+        assert any("non-self neighbour" in line for line in report.checks[0].lines)
 
     def test_connected_graph_passes(self):
         n = 10
@@ -270,12 +285,17 @@ class TestTimeSplit:
         check_time_split(report, _feature_set(np.ones((5, 2))), {}, None)
         assert _status(report, "time split") == FAIL
 
-    def test_split_with_positives_on_both_sides_passes(self):
+    def test_split_with_positives_on_both_sides_still_warns_about_cumulative_features(self):
+        """Positives on both sides is necessary but not sufficient.
+
+        FLOWS_TO aggregates are incremented on MERGE and span the whole dataset,
+        so the split separates accounts by inception without separating the
+        feature values in time. Reporting PASS would imply a sound temporal
+        setup that does not exist.
+        """
         num_nodes = 400
         node_ids = [f"n{i}" for i in range(num_nodes)]
-        # Spread activity across a range so a 70/30 cutoff is meaningful.
         times = {node_id: 1_600_000_000 + i * 3600 for i, node_id in enumerate(node_ids)}
-        # Positives on both sides of the cutoff.
         truth = np.zeros(num_nodes, dtype=bool)
         truth[:100] = True
         truth[-100:] = True
@@ -284,7 +304,11 @@ class TestTimeSplit:
         check_time_split(
             report, _feature_set(np.ones((num_nodes, 2)), node_ids=node_ids), times, truth
         )
-        assert _status(report, "time split") == PASS
+
+        assert _status(report, "time split") == WARN
+        joined = " ".join(report.checks[0].lines + [report.checks[0].headline])
+        assert "cumulative" in joined
+        assert any("TRANSFER.ts" in line for line in report.checks[0].lines)
 
     def test_too_few_positives_on_one_side_warns(self):
         num_nodes = 200
