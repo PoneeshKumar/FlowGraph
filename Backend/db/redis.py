@@ -6,7 +6,7 @@ Stores transaction amounts as sorted sets (ZSET) keyed by edge, scored by timest
 """
 
 import logging
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Sequence, Tuple
 from datetime import datetime, timedelta, timezone
 
 import redis.asyncio as redis
@@ -285,6 +285,79 @@ class RedisClient:
         except RedisError as e:
             logger.error(f"Failed to get account in-degree: {e}")
             raise
+
+    async def bulk_add_edges_to_timeseries(
+        self,
+        edges: Sequence[Dict[str, Any]],
+        batch_size: int = 1000,
+        ttl_seconds: int = 30 * 24 * 3600,
+    ) -> int:
+        """
+        Pipelined ZADD of many transactions — for dataset ingestion only.
+
+        add_edge_to_timeseries issues two round trips per transaction (ZADD then
+        EXPIRE), which is fine for a live stream and far too slow for millions of
+        rows. This pipelines a whole batch into one round trip.
+
+        Matters for GNN training specifically: 12 of the 29 node features are
+        the Redis 1h/24h/7d windows, so skipping this leaves them all zero and
+        throws away every temporal signal.
+
+        Member encoding matches add_edge_to_timeseries exactly —
+        "{amount_cents}|{unix_ts}" scored by unix_ts — so
+        get_all_account_volumes and get_edge_volume_in_window read it back
+        unchanged.
+
+        Args:
+            edges:       Dicts with sender_id, receiver_id, amount_cents, and
+                         timestamp_utc (datetime or unix seconds).
+            batch_size:  Transactions per pipeline flush.
+            ttl_seconds: Edge key TTL. Wall-clock, so historical datasets still
+                         expire 30 days after loading, not 30 days after their
+                         own timestamps.
+
+        Returns:
+            Number of transactions written.
+        """
+        if not edges:
+            return 0
+        if batch_size < 1:
+            raise ValueError(f"batch_size must be >= 1, got {batch_size}")
+
+        written = 0
+        try:
+            for start in range(0, len(edges), batch_size):
+                chunk = edges[start : start + batch_size]
+
+                async with self.client.pipeline(transaction=False) as pipe:
+                    touched_keys = set()
+                    for edge in chunk:
+                        timestamp = edge["timestamp_utc"]
+                        if isinstance(timestamp, datetime):
+                            timestamp = int(timestamp.timestamp())
+                        timestamp = int(timestamp)
+
+                        amount_cents = int(edge["amount_cents"])
+                        edge_key = f"edge:{edge['sender_id']}:{edge['receiver_id']}"
+                        member = f"{amount_cents}|{timestamp}"
+
+                        pipe.zadd(edge_key, {member: timestamp})
+                        touched_keys.add(edge_key)
+
+                    # One EXPIRE per distinct key, not per transaction — a busy
+                    # account pair would otherwise re-issue it hundreds of times.
+                    for edge_key in touched_keys:
+                        pipe.expire(edge_key, ttl_seconds)
+
+                    await pipe.execute()
+
+                written += len(chunk)
+        except RedisError as e:
+            logger.error(f"Bulk edge timeseries write failed: {e}")
+            raise
+
+        logger.info(f"Bulk Redis write: {written} transactions")
+        return written
 
     async def get_all_account_volumes(
         self,
