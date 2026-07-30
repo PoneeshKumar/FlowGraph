@@ -181,6 +181,23 @@ class TestStructure:
         detail = " ".join(report.checks[0].lines)
         assert "no non-self neighbour: 1" in detail
 
+    def test_no_self_loops_does_not_advise_dropping_them(self):
+        """Advice must match what the graph actually has.
+
+        After the feature builder started excluding self-loops, the check kept
+        telling the reader to drop self-loops that were no longer there.
+        """
+        # 4 nodes: 0->1 real, node 3 is genuinely isolated. No self-loops.
+        edges = np.array([[0, 1], [1, 2]], dtype=np.int64)
+        report = Report()
+        check_structure(report, _feature_set(np.ones((4, 2)), edges))
+
+        assert _status(report, "structure") == WARN
+        joined = " ".join(report.checks[0].lines + [report.checks[0].headline])
+        assert "no self-loops" in joined
+        assert "drop the self-loop edges" not in joined
+        assert "only ever transacted with themselves" in joined
+
     def test_mostly_unreachable_fails(self):
         # 10 nodes, one real edge — 8 nodes touch nothing at all.
         edges = np.array([[0], [1]], dtype=np.int64)

@@ -280,16 +280,28 @@ def check_structure(report: Report, feature_set: Any) -> None:
         )
         return
     if unreachable or self_loops:
-        report.add(
-            "structure", WARN,
+        advice = []
+        if self_loops:
+            advice.append(
+                "drop the self-loop edges: SAGEConv already applies its own root "
+                "weight, so a self-loop makes a node aggregate itself twice, and "
+                "it inflates degree/volume features"
+            )
+        if unreachable:
+            advice.append(
+                "the unreachable nodes only ever transacted with themselves, so "
+                "message passing adds nothing for them — they are trainable but "
+                "the GNN cannot beat a per-node model on that slice; consider "
+                "reporting metrics separately for reachable vs unreachable nodes"
+            )
+        headline = (
             f"{self_loops:,} self-loops and {unreachable:,} nodes "
-            f"({unreachable / num_nodes:.1%}) with no non-self neighbour",
-            lines + [
-                "consider dropping self-loop edges: SAGEConv already applies its "
-                "own root weight, so a self-loop makes a node aggregate itself "
-                "twice, and it inflates degree/volume features",
-            ],
+            f"({unreachable / num_nodes:.1%}) with no non-self neighbour"
+            if self_loops
+            else f"no self-loops, but {unreachable:,} nodes "
+                 f"({unreachable / num_nodes:.1%}) have no non-self neighbour"
         )
+        report.add("structure", WARN, headline, lines + advice)
         return
     report.add(
         "structure", PASS,
