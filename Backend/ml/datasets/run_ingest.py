@@ -83,27 +83,51 @@ def _parse_args() -> argparse.Namespace:
     return parser.parse_args()
 
 
-async def _reset_stores(neo4j_client, redis_client) -> None:
+async def _reset_stores(
+    neo4j_client, redis_client, batch_size: int = 20_000
+) -> None:
     """Wipe the graph so a reload does not inflate FLOWS_TO aggregates.
 
     FLOWS_TO aggregates are incremented on MATCH, so loading the same rows twice
     doubles tx_count and total_amount. Re-running without --reset is only safe
     for genuinely new data.
+
+    Relationships are deleted BEFORE nodes, in two separate batched phases. The
+    obvious `MATCH (n) WITH n LIMIT 50000 DETACH DELETE n` does not survive a
+    real graph: DETACH pulls in every relationship of every matched node, and on
+    the loaded HI-Small graph (513,987 nodes, 1,010,384 FLOWS_TO, 5,044,315
+    TRANSFER, max degree ~14k) the very first batch exceeded Neo4j's
+    dbms.memory.transaction.total.max of 1.4 GiB and aborted. Deleting
+    relationships first keeps each transaction proportional to batch_size rather
+    than to the degree of whatever nodes happened to be matched.
     """
-    logger.warning("--reset: deleting all graph nodes and flushing Redis")
+    logger.warning("--reset: deleting all relationships, then all nodes")
     from config import NEO4J_DATABASE
 
+    phases = (
+        (
+            "relationships",
+            "MATCH ()-[r]->() WITH r LIMIT $batch_size DELETE r RETURN count(*) AS n",
+        ),
+        (
+            "nodes",
+            "MATCH (n) WITH n LIMIT $batch_size DETACH DELETE n RETURN count(*) AS n",
+        ),
+    )
+
     async with neo4j_client.driver.session(database=NEO4J_DATABASE) as session:
-        # Batched so a large graph does not blow up the transaction heap.
-        while True:
-            result = await session.run(
-                "MATCH (n) WITH n LIMIT 50000 DETACH DELETE n RETURN count(n) AS n"
-            )
-            record = await result.single()
-            deleted = record["n"] if record else 0
-            logger.info("  deleted %d nodes", deleted)
-            if not deleted:
-                break
+        for label, query in phases:
+            total = 0
+            while True:
+                result = await session.run(query, batch_size=batch_size)
+                record = await result.single()
+                deleted = int(record["n"]) if record else 0
+                total += deleted
+                if not deleted:
+                    break
+                if total % (batch_size * 10) == 0:
+                    logger.info("  deleted %s so far: %d", label, total)
+            logger.info("  deleted %d %s", total, label)
 
     if redis_client is not None:
         await redis_client.client.flushdb()
