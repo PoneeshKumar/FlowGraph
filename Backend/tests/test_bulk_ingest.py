@@ -65,6 +65,25 @@ def _client(calls: List[tuple], records: Any = None) -> Neo4jClient:
     return client
 
 
+def _edge_record(
+    src: str, dst: str, total_amount: float, tx_count: int
+) -> Dict[str, Any]:
+    """A row shaped like one record of export_flows_to_edges.
+
+    first_ts/last_ts are part of that contract — the feature builder derives
+    account age from first_ts, since Account.created_at records ingest time.
+    """
+    epoch = int(REF.timestamp())
+    return {
+        "src": src,
+        "dst": dst,
+        "total_amount": total_amount,
+        "tx_count": tx_count,
+        "first_ts": epoch,
+        "last_ts": epoch,
+    }
+
+
 def _txn(
     sender: str,
     receiver: str,
@@ -303,9 +322,9 @@ class TestBulkUpsert:
 class TestRecomputePageRankFull:
     async def test_writes_scores_for_every_account(self):
         edges = [
-            {"src": "a", "dst": "b", "total_amount": 100.0, "tx_count": 1},
-            {"src": "b", "dst": "c", "total_amount": 200.0, "tx_count": 2},
-            {"src": "c", "dst": "a", "total_amount": 150.0, "tx_count": 1},
+            _edge_record("a", "b", 100.0, 1),
+            _edge_record("b", "c", 200.0, 2),
+            _edge_record("c", "a", 150.0, 1),
         ]
         calls: List[tuple] = []
         client = _client(calls, records=edges)
@@ -320,7 +339,7 @@ class TestRecomputePageRankFull:
 
     async def test_scores_are_written_in_batches(self):
         edges = [
-            {"src": f"a{i}", "dst": f"a{i + 1}", "total_amount": 10.0, "tx_count": 1}
+            _edge_record(f"a{i}", f"a{i + 1}", 10.0, 1)
             for i in range(24)
         ]
         calls: List[tuple] = []

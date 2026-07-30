@@ -384,8 +384,14 @@ class Neo4jClient:
             reference_time: Window anchor; defaults to now (benchmarks anchor
                             to the dataset's own max timestamp instead)
 
+        first_ts/last_ts are returned so callers can derive per-account activity
+        times. Nothing else surfaces them: Account.created_at records when the
+        outbox inserted the node, not when the account was first active, so it
+        is useless as an age signal on a historical dataset. Existing readers
+        index by key and ignore the extra fields.
+
         Returns:
-            List of dicts: {src, dst, total_amount, tx_count}
+            List of dicts: {src, dst, total_amount, tx_count, first_ts, last_ts}
         """
         ref = reference_time if reference_time is not None else datetime.now(timezone.utc)
         window_start_epoch = int(ref.timestamp()) - window_days * 86400
@@ -394,7 +400,8 @@ class Neo4jClient:
         MATCH (a:Account)-[f:FLOWS_TO]->(b:Account)
         WHERE f.last_ts >= $window_start_epoch
         RETURN a.id AS src, b.id AS dst,
-               f.total_amount AS total_amount, f.tx_count AS tx_count
+               f.total_amount AS total_amount, f.tx_count AS tx_count,
+               f.first_ts AS first_ts, f.last_ts AS last_ts
         """
         # Batch export may legitimately take longer than the per-account cycle
         # budget, but must still be bounded — an unindexed runaway scan cannot
@@ -412,6 +419,8 @@ class Neo4jClient:
                         "dst":          record["dst"],
                         "total_amount": record["total_amount"],
                         "tx_count":     record["tx_count"],
+                        "first_ts":     record["first_ts"],
+                        "last_ts":      record["last_ts"],
                     }
                     async for record in result
                 ]

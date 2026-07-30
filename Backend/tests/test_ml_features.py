@@ -47,9 +47,27 @@ def _node(
     }
 
 
-def _edge(src: str, dst: str, total_amount: float, tx_count: int) -> Dict[str, Any]:
-    """A row shaped like one record of export_flows_to_edges."""
-    return {"src": src, "dst": dst, "total_amount": total_amount, "tx_count": tx_count}
+def _edge(
+    src: str,
+    dst: str,
+    total_amount: float,
+    tx_count: int,
+    first_ts: Any = None,
+    last_ts: Any = None,
+) -> Dict[str, Any]:
+    """A row shaped like one record of export_flows_to_edges.
+
+    first_ts/last_ts are unix SECONDS, as the consumer stores them.
+    """
+    default_ts = int(REF.timestamp())
+    return {
+        "src": src,
+        "dst": dst,
+        "total_amount": total_amount,
+        "tx_count": tx_count,
+        "first_ts": default_ts if first_ts is None else first_ts,
+        "last_ts": default_ts if last_ts is None else last_ts,
+    }
 
 
 def _assemble(
@@ -141,24 +159,153 @@ class TestStructuralFeatures:
 
 
 class TestAccountAge:
-    def test_age_computed_from_millisecond_timestamp(self):
-        """Neo4j timestamp() is epoch ms — seconds would be off by 1000x."""
-        created = REF - timedelta(days=30)
-        fs = _assemble([_node("a", created_at=int(created.timestamp() * 1000))], [])
-        col = fs.feature_names.index("account_age_days")
-        assert fs.x[0, col] == pytest.approx(30.0, abs=0.01)
+    """Age comes from FLOWS_TO.first_ts, never Account.created_at.
 
-    def test_unknown_created_at_is_zero_not_epoch_zero(self):
-        """A missing timestamp must not read as an account created in 1970."""
-        fs = _assemble([_node("a", created_at=None)], [])
+    created_at is set to Neo4j timestamp() when the outbox inserts the node, so
+    it records ingest time. On the real 2022 dataset ingested in 2026 that made
+    every age negative and clipped the whole column to zero.
+    """
+
+    def test_age_computed_from_first_activity_in_seconds(self):
+        first = int((REF - timedelta(days=30)).timestamp())
+        fs = _assemble(
+            [_node("a"), _node("b")],
+            [_edge("a", "b", 100.0, 1, first_ts=first)],
+        )
+        col = fs.feature_names.index("account_age_days")
+        assert fs.x[fs.node_ids.index("a"), col] == pytest.approx(30.0, abs=0.01)
+
+    def test_ingest_time_created_at_is_ignored(self):
+        """A created_at far in the future must not drive the feature."""
+        first = int((REF - timedelta(days=10)).timestamp())
+        ingested_later = int((REF + timedelta(days=1000)).timestamp() * 1000)
+        fs = _assemble(
+            [_node("a", created_at=ingested_later), _node("b", created_at=ingested_later)],
+            [_edge("a", "b", 100.0, 1, first_ts=first)],
+        )
+        col = fs.feature_names.index("account_age_days")
+        assert fs.x[fs.node_ids.index("a"), col] == pytest.approx(10.0, abs=0.01)
+
+    def test_receiver_age_also_counted(self):
+        """An account is as old as its first edge, sent or received."""
+        first = int((REF - timedelta(days=7)).timestamp())
+        fs = _assemble(
+            [_node("a"), _node("b")],
+            [_edge("a", "b", 100.0, 1, first_ts=first)],
+        )
+        col = fs.feature_names.index("account_age_days")
+        assert fs.x[fs.node_ids.index("b"), col] == pytest.approx(7.0, abs=0.01)
+
+    def test_earliest_edge_wins(self):
+        old = int((REF - timedelta(days=40)).timestamp())
+        recent = int((REF - timedelta(days=2)).timestamp())
+        fs = _assemble(
+            [_node("a"), _node("b"), _node("c")],
+            [
+                _edge("a", "b", 100.0, 1, first_ts=recent),
+                _edge("c", "a", 50.0, 1, first_ts=old),
+            ],
+        )
+        col = fs.feature_names.index("account_age_days")
+        assert fs.x[fs.node_ids.index("a"), col] == pytest.approx(40.0, abs=0.01)
+
+    def test_no_edges_gives_zero_not_epoch_zero(self):
+        """An edgeless account must not read as created in 1970."""
+        fs = _assemble([_node("a")], [])
         col = fs.feature_names.index("account_age_days")
         assert fs.x[0, col] == pytest.approx(0.0)
 
-    def test_future_created_at_clamps_to_zero(self):
-        created = REF + timedelta(days=5)
-        fs = _assemble([_node("a", created_at=int(created.timestamp() * 1000))], [])
+    def test_future_first_ts_clamps_to_zero(self):
+        first = int((REF + timedelta(days=5)).timestamp())
+        fs = _assemble(
+            [_node("a"), _node("b")],
+            [_edge("a", "b", 100.0, 1, first_ts=first)],
+        )
         col = fs.feature_names.index("account_age_days")
         assert fs.x[0, col] == pytest.approx(0.0)
+
+    def test_node_first_ts_exposed_for_chronological_split(self):
+        """Metadata, not a feature — absolute time must not reach the model."""
+        first = int((REF - timedelta(days=3)).timestamp())
+        fs = _assemble(
+            [_node("a"), _node("b")],
+            [_edge("a", "b", 100.0, 1, first_ts=first)],
+        )
+        assert fs.node_first_ts is not None
+        assert fs.node_first_ts[fs.node_ids.index("a")] == pytest.approx(first)
+        assert "first_active_ts" not in fs.feature_names
+
+
+class TestSelfLoops:
+    """Self-transfers must not contaminate the counterparty aggregates.
+
+    On the loaded HI-Small graph, 365,987 of 1,010,384 FLOWS_TO edges (36%) are
+    self-loops, and 92,154 accounts (17.9%) have no other neighbour — every one
+    of which would otherwise show the exact pass-through mule signature.
+    """
+
+    def test_self_loop_excluded_from_edge_index(self):
+        fs = _assemble(
+            [_node("a"), _node("b")],
+            [_edge("a", "b", 100.0, 1), _edge("a", "a", 500.0, 5)],
+        )
+        assert fs.edge_index.shape == (2, 1)
+        assert fs.node_ids[fs.edge_index[0, 0]] == "a"
+        assert fs.node_ids[fs.edge_index[1, 0]] == "b"
+
+    def test_self_loop_only_account_does_not_fake_a_mule(self):
+        """The whole reason for this handling.
+
+        Counting a self-loop as a counterparty yields out_degree=1, in_degree=1,
+        net_flow=0 and flow_ratio=0.5 — indistinguishable from a perfect
+        pass-through mule, from an account that never touched anyone.
+        """
+        fs = _assemble([_node("lonely")], [_edge("lonely", "lonely", 9_000.0, 9)])
+        col = {name: i for i, name in enumerate(fs.feature_names)}
+
+        assert fs.x[0, col["out_degree"]] == pytest.approx(0.0)
+        assert fs.x[0, col["in_degree"]] == pytest.approx(0.0)
+        assert fs.x[0, col["total_out_amount"]] == pytest.approx(0.0)
+        assert fs.x[0, col["flow_ratio"]] == pytest.approx(0.0)
+        assert fs.edge_index.shape == (2, 0)
+
+    def test_self_loop_volume_is_preserved_not_discarded(self):
+        fs = _assemble([_node("a")], [_edge("a", "a", 9_000.0, 9)])
+        col = {name: i for i, name in enumerate(fs.feature_names)}
+
+        assert fs.x[0, col["self_loop_count"]] == pytest.approx(9.0)
+        assert fs.x[0, col["self_loop_amount"]] == pytest.approx(9_000.0)
+
+    def test_real_counterparty_aggregates_unaffected(self):
+        fs = _assemble(
+            [_node("a"), _node("b")],
+            [_edge("a", "b", 100.0, 2), _edge("a", "a", 500.0, 5)],
+        )
+        col = {name: i for i, name in enumerate(fs.feature_names)}
+        a = fs.node_ids.index("a")
+
+        assert fs.x[a, col["out_degree"]] == pytest.approx(1.0)
+        assert fs.x[a, col["total_out_amount"]] == pytest.approx(100.0)
+        assert fs.x[a, col["out_tx_count"]] == pytest.approx(2.0)
+        assert fs.x[a, col["self_loop_amount"]] == pytest.approx(500.0)
+
+    def test_self_loops_still_establish_account_age(self):
+        """An account paying itself proves it existed at that time."""
+        first = int((REF - timedelta(days=12)).timestamp())
+        fs = _assemble([_node("a")], [_edge("a", "a", 100.0, 1, first_ts=first)])
+        col = fs.feature_names.index("account_age_days")
+        assert fs.x[0, col] == pytest.approx(12.0, abs=0.01)
+
+    def test_can_be_disabled_for_comparison(self):
+        builder = FeatureBuilder(neo4j_client=None)
+        fs = builder._assemble(
+            [_node("a")], [_edge("a", "a", 500.0, 5)], {}, [], (1, 24, 168), REF,
+            False,
+        )
+        col = {name: i for i, name in enumerate(fs.feature_names)}
+
+        assert fs.edge_index.shape == (2, 1)
+        assert fs.x[0, col["out_degree"]] == pytest.approx(1.0)
 
 
 class TestCommunityFeatures:

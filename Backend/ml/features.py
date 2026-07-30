@@ -68,7 +68,14 @@ GRAPH_FEATURES: Tuple[str, ...] = (
     "net_flow",            # in - out; near zero for a pass-through mule
     "flow_ratio",          # out / (in + out); ~0.5 means it forwards all it gets
     "pagerank_score",
-    "account_age_days",
+    "account_age_days",     # from FLOWS_TO.first_ts, NOT Account.created_at
+)
+
+# Self-transfer behaviour, held separately so it cannot contaminate the
+# counterparty aggregates above. See the self-loop handling in _assemble.
+SELF_LOOP_FEATURES: Tuple[str, ...] = (
+    "self_loop_count",
+    "self_loop_amount",
 )
 
 # Louvain output, as derived stats rather than the community_id itself. The id
@@ -103,6 +110,11 @@ class FeatureSet:
     edge_index: np.ndarray         # [2, num_edges] int64
     edge_weight: np.ndarray        # [num_edges] float32
     feature_names: List[str] = field(default_factory=list)
+    # Per-node first activity, unix seconds, NaN where unknown. Metadata, NOT a
+    # feature column — a chronological train/test split needs it, but feeding
+    # absolute time to the model would teach it calendar dates rather than
+    # behaviour.
+    node_first_ts: Optional[np.ndarray] = None
 
     @property
     def num_nodes(self) -> int:
@@ -157,6 +169,7 @@ class FeatureBuilder:
         reference_time: Optional[datetime] = None,
         flag_limit: int = 100_000,
         export_timeout_seconds: float = 1800.0,
+        drop_self_loops: bool = True,
     ) -> FeatureSet:
         """Pull from every store and assemble the graph.
 
@@ -201,7 +214,9 @@ class FeatureBuilder:
                 status="open", limit=flag_limit
             )
 
-        return self._assemble(nodes, edges, volumes, flags, windows_hours, ref)
+        return self._assemble(
+            nodes, edges, volumes, flags, windows_hours, ref, drop_self_loops
+        )
 
     def _assemble(
         self,
@@ -211,6 +226,7 @@ class FeatureBuilder:
         flags: List[Dict[str, Any]],
         windows_hours: Sequence[int],
         ref: datetime,
+        drop_self_loops: bool = True,
     ) -> FeatureSet:
         """Pure assembly step — no I/O, so it is directly unit-testable."""
         from db.redis import _window_label  # shared naming, single source
@@ -235,19 +251,48 @@ class FeatureBuilder:
         num_nodes = len(node_ids)
 
         nodes_df = pd.DataFrame(nodes).set_index("id").reindex(node_ids)
-        edges_df = pd.DataFrame(
-            edges, columns=["src", "dst", "total_amount", "tx_count"]
+        all_edges_df = pd.DataFrame(
+            edges,
+            columns=["src", "dst", "total_amount", "tx_count", "first_ts", "last_ts"],
         )
+
+        if not all_edges_df.empty:
+            for column in ("total_amount", "tx_count", "first_ts", "last_ts"):
+                all_edges_df[column] = pd.to_numeric(
+                    all_edges_df[column], errors="coerce"
+                ).fillna(0.0)
+
+        # ---- split self-loops out before aggregating anything ---------------
+        #
+        # An account transferring to itself is not a counterparty, and counting
+        # it as one corrupts the most diagnostic feature in the set. A
+        # self-loop-only account would otherwise present out_degree=1,
+        # in_degree=1, net_flow=0 and flow_ratio=0.5 — an exact pass-through
+        # mule signature, produced by an account that never touched anyone.
+        # Measured on the loaded HI-Small graph that is 92,154 accounts (17.9%)
+        # faking the pattern, off 365,987 self-loop edges (36% of all edges).
+        #
+        # The information is not discarded: it moves into SELF_LOOP_FEATURES so
+        # the model can still use self-transfer behaviour if it is predictive.
+        # Self-loops are also excluded from edge_index, because SAGEConv already
+        # applies its own root weight and a self-loop makes a node aggregate
+        # itself a second time.
+        self_loop_df = all_edges_df.iloc[:0]
+        if drop_self_loops and not all_edges_df.empty:
+            is_self = all_edges_df["src"] == all_edges_df["dst"]
+            self_loop_df = all_edges_df[is_self]
+            edges_df = all_edges_df[~is_self].reset_index(drop=True)
+            if len(self_loop_df):
+                logger.info(
+                    f"Excluded {len(self_loop_df):,} self-loop edges from "
+                    f"aggregates and edge_index "
+                    f"({len(self_loop_df) / len(all_edges_df):.1%} of edges)"
+                )
+        else:
+            edges_df = all_edges_df
 
         # ---- structural aggregates (vectorized groupby, not a Python loop) --
         if not edges_df.empty:
-            edges_df["total_amount"] = pd.to_numeric(
-                edges_df["total_amount"], errors="coerce"
-            ).fillna(0.0)
-            edges_df["tx_count"] = pd.to_numeric(
-                edges_df["tx_count"], errors="coerce"
-            ).fillna(0.0)
-
             out_agg = edges_df.groupby("src").agg(
                 out_degree=("dst", "nunique"),
                 total_out_amount=("total_amount", "sum"),
@@ -285,27 +330,41 @@ class FeatureBuilder:
             nodes_df, "pagerank_score", num_nodes
         )
 
-        # Neo4j timestamp() is epoch MILLISECONDS, not seconds.
+        # ---- account age, from first observed ACTIVITY -----------------------
         #
-        # created_at must keep its NaN here rather than being zero-filled: a
-        # missing timestamp zero-filled to epoch 0 would compute an age of
-        # ~20,000 days, which is far worse than admitting we do not know.
-        created_column = nodes_df.get("created_at")
-        if created_column is None:
-            created_ms = np.full(num_nodes, np.nan, dtype="float64")
-        else:
-            created_ms = pd.to_numeric(
-                created_column, errors="coerce"
-            ).to_numpy(dtype="float64")
-        # A non-positive timestamp is unknown, not 1970.
-        created_ms = np.where(created_ms > 0, created_ms, np.nan)
-
-        ref_ms = ref.timestamp() * 1000.0
-        age_days = (ref_ms - created_ms) / 86_400_000.0
-        # Unknown or future created_at -> age 0 rather than a negative age.
+        # Derived from FLOWS_TO.first_ts, not Account.created_at. created_at is
+        # set to Neo4j timestamp() when the outbox inserts the node, so it
+        # records ingest time rather than account age: on this dataset it made
+        # every age negative (data from 2022, inserted in 2026) and clipped the
+        # whole column to zero, i.e. a dead feature.
+        #
+        # first_ts is unix SECONDS (the consumer stores epoch seconds
+        # deliberately), unlike created_at which is Neo4j milliseconds.
+        # Self-loops are included here: an account paying itself still proves it
+        # existed at that time.
+        first_seen = self._node_first_activity(all_edges_df, frame.index)
+        ref_seconds = ref.timestamp()
+        age_days = (ref_seconds - first_seen) / 86_400.0
+        # Unknown or future first activity -> 0 rather than a negative age.
         frame["account_age_days"] = np.nan_to_num(
             np.clip(age_days, 0.0, None), nan=0.0
         )
+
+        # ---- self-loop behaviour, kept rather than thrown away ---------------
+        if len(self_loop_df):
+            loop_agg = self_loop_df.groupby("src").agg(
+                self_loop_count=("tx_count", "sum"),
+                self_loop_amount=("total_amount", "sum"),
+            )
+            frame["self_loop_count"] = (
+                loop_agg["self_loop_count"].reindex(frame.index).fillna(0.0).to_numpy()
+            )
+            frame["self_loop_amount"] = (
+                loop_agg["self_loop_amount"].reindex(frame.index).fillna(0.0).to_numpy()
+            )
+        else:
+            frame["self_loop_count"] = 0.0
+            frame["self_loop_amount"] = 0.0
 
         # ---- community stats ------------------------------------------------
         community_ids = nodes_df.get("community_id")
@@ -369,6 +428,7 @@ class FeatureBuilder:
 
         feature_names = (
             list(GRAPH_FEATURES)
+            + list(SELF_LOOP_FEATURES)
             + list(COMMUNITY_FEATURES)
             + volume_features
             + list(NODE_TYPE_FEATURES)
@@ -408,7 +468,35 @@ class FeatureBuilder:
             edge_index=edge_index,
             edge_weight=edge_weight,
             feature_names=feature_names,
+            node_first_ts=first_seen,
         )
+
+    @staticmethod
+    def _node_first_activity(
+        all_edges_df: pd.DataFrame, index: pd.Index
+    ) -> np.ndarray:
+        """Earliest FLOWS_TO.first_ts touching each account, in unix seconds.
+
+        Both directions count: an account is as old as the first edge it appears
+        on, whether it sent or received. NaN where the account has no edge with
+        a usable timestamp, so the caller can distinguish "unknown" from "new".
+        """
+        if all_edges_df.empty or "first_ts" not in all_edges_df.columns:
+            return np.full(len(index), np.nan, dtype="float64")
+
+        timed = all_edges_df[all_edges_df["first_ts"] > 0]
+        if timed.empty:
+            return np.full(len(index), np.nan, dtype="float64")
+
+        stacked = pd.concat(
+            [
+                timed[["src", "first_ts"]].rename(columns={"src": "account"}),
+                timed[["dst", "first_ts"]].rename(columns={"dst": "account"}),
+            ],
+            ignore_index=True,
+        )
+        earliest = stacked.groupby("account", sort=False)["first_ts"].min()
+        return earliest.reindex(index).to_numpy(dtype="float64")
 
     @staticmethod
     def _numeric_column(
@@ -559,6 +647,7 @@ class FeatureBuilder:
         ]
         feature_names = (
             list(GRAPH_FEATURES)
+            + list(SELF_LOOP_FEATURES)
             + list(COMMUNITY_FEATURES)
             + volume_features
             + list(NODE_TYPE_FEATURES)
@@ -572,4 +661,5 @@ class FeatureBuilder:
             edge_index=np.zeros((2, 0), dtype=np.int64),
             edge_weight=np.zeros((0,), dtype=np.float32),
             feature_names=feature_names,
+            node_first_ts=np.zeros((0,), dtype="float64"),
         )

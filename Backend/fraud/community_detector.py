@@ -41,6 +41,7 @@ from config import (
     LOUVAIN_WEIGHT_MODE,
     LOUVAIN_MIN_COMMUNITY_SIZE,
     LOUVAIN_MIN_EDGE_TX_COUNT,
+    LOUVAIN_EXPORT_TIMEOUT_SECONDS,
     LOUVAIN_CORE_K,
     LOUVAIN_DENSITY_REF,
     LOUVAIN_VOLUME_FLOOR_CENTS,
@@ -547,6 +548,7 @@ class CommunityDetector:
     async def run(
         self,
         reference_time: Optional[datetime] = None,
+        export_timeout_seconds: Optional[float] = None,
     ) -> Dict[str, Any]:
         """
         One full batch pass.
@@ -566,15 +568,30 @@ class CommunityDetector:
         Args:
             reference_time: Window anchor / detected_at timestamp; defaults to
                             now (benchmarks pass the dataset's max timestamp)
+            export_timeout_seconds:
+                            Timeout for the FLOWS_TO export. Defaults to
+                            LOUVAIN_EXPORT_TIMEOUT_SECONDS (120s), which is
+                            sized for a modest window and is NOT enough for a
+                            full-size graph: exporting the 1,010,384 edges of
+                            the loaded HI-Small dataset takes over two minutes,
+                            so the default aborts the batch before Louvain even
+                            starts. Pass a larger value for bulk graphs.
 
         Returns:
             {"communities": kept count, "assignments": node props written,
              "flags": list of flag dicts (persisted ones when postgres present)}
         """
         ref = reference_time if reference_time is not None else datetime.now(timezone.utc)
+        timeout = (
+            export_timeout_seconds
+            if export_timeout_seconds is not None
+            else LOUVAIN_EXPORT_TIMEOUT_SECONDS
+        )
 
         edges = await self.neo4j.export_flows_to_edges(
-            window_days=LOUVAIN_WINDOW_DAYS, reference_time=ref
+            window_days=LOUVAIN_WINDOW_DAYS,
+            reference_time=ref,
+            query_timeout_seconds=timeout,
         )
         graph = build_undirected_graph(edges)
         if graph.number_of_nodes() == 0:
