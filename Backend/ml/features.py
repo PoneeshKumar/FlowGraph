@@ -40,6 +40,19 @@ RISK_LEVEL_TO_CLASS: Dict[str, int] = {
 }
 NUM_CLASSES = len(RISK_LEVEL_TO_CLASS)
 
+# Which detectors are allowed to define labels. CYCLE only, deliberately.
+#
+# COMMUNITY flags are excluded to stop target leakage. score_community derives
+# risk_level from risk_score by fixed thresholds (community_detector.py:349),
+# and community_risk_score feeds that same risk_score in as a feature — so a
+# COMMUNITY-labelled account would arrive with its own answer in column 11 and
+# the model would just relearn the thresholds.
+#
+# The split also matches the intended architecture: Louvain is a feature
+# provider, cycle detection is the label source, and no feature shares a
+# computation with the label it predicts.
+LABEL_FLAG_TYPES: Tuple[str, ...] = ("CYCLE",)
+
 # The four node types from the CLAUDE.md schema, in fixed order. Column order
 # is part of the trained model's contract — never reorder these.
 NODE_TYPES: Tuple[str, ...] = ("Account", "Merchant", "Bank", "Exchange")
@@ -410,6 +423,23 @@ class FeatureBuilder:
 
         COMMUNITY flags carry their community_id inside details, which asyncpg
         hands back as either a dict or a JSON string depending on codec setup.
+
+        flagged_member_count comes from details, NOT from len(account_ids):
+        account_ids is every member of the community, so using its length would
+        just duplicate community_size. details["flagged_member_count"] is the
+        count of members already carrying flags from other detectors
+        (community_detector.py:376), which is the actual signal.
+
+        CAUTION — residual leakage. Both values returned here depend on CYCLE
+        flags, which are now the labels: score_community folds
+        flagged_member_count/n into risk_score via overlap_score
+        (community_detector.py:334), and flagged_accounts comes from
+        get_flagged_account_ids(exclude_flag_type='COMMUNITY'). So these two
+        columns encode "how many of my community peers are labelled fraud".
+        That is a neighbour-label feature, not a self-label one, so it is much
+        weaker than the leak LABEL_FLAG_TYPES fixes — but on a single shared
+        graph it can still carry test-node labels into train-node features.
+        Drop columns 11 and 12 if validation scores look too good to be true.
         """
         import json
 
@@ -434,7 +464,12 @@ class FeatureBuilder:
                 risk[community_id] = float(flag.get("risk_score") or 0.0)
             except (TypeError, ValueError):
                 risk[community_id] = 0.0
-            flagged[community_id] = float(len(flag.get("account_ids") or []))
+            try:
+                flagged[community_id] = float(
+                    details.get("flagged_member_count") or 0.0
+                )
+            except (TypeError, ValueError):
+                flagged[community_id] = 0.0
 
         return risk, flagged
 
@@ -445,22 +480,26 @@ class FeatureBuilder:
     ) -> Tuple[np.ndarray, np.ndarray]:
         """Derive class labels from risk_flags.
 
-        These are WEAK labels: they come from the cycle and Louvain detectors,
-        which are heuristics, not ground truth. Two consequences worth being
-        explicit about:
+        Only LABEL_FLAG_TYPES (CYCLE) count — see that constant for why
+        COMMUNITY flags are excluded.
+
+        These are WEAK labels: the cycle detector is a heuristic, not ground
+        truth. Two consequences worth being explicit about:
 
           - An account with no flag gets class 0 ("low"). Absence of a flag is
             not evidence of innocence, it usually means nothing looked. That is
             why labelled_mask exists — train on the mask if you want to avoid
             teaching the model that unexamined equals safe.
           - An account in several flags takes its HIGHEST level, so a critical
-            cycle is not diluted by a medium community flag.
+            cycle is not diluted by a medium one.
         """
         num_nodes = len(index_of)
         y = np.zeros(num_nodes, dtype=np.int64)
         labelled = np.zeros(num_nodes, dtype=bool)
 
         for flag in flags:
+            if flag.get("flag_type") not in LABEL_FLAG_TYPES:
+                continue
             level = RISK_LEVEL_TO_CLASS.get(str(flag.get("risk_level", "")).lower())
             if level is None:
                 continue

@@ -186,17 +186,59 @@ class TestCommunityFeatures:
             {
                 "flag_type": "COMMUNITY",
                 "risk_level": "high",
-                "risk_score": 78.5,
+                "risk_score": 0.785,
                 "account_ids": ["a", "b", "c"],
-                "details": {"community_id": "deadbeef1234"},
+                "details": {"community_id": "deadbeef1234", "flagged_member_count": 2},
             }
         ]
         fs = _assemble(nodes, [], flags=flags)
         risk = fs.feature_names.index("community_risk_score")
         flagged = fs.feature_names.index("community_flagged_members")
 
-        assert fs.x[0, risk] == pytest.approx(78.5)
-        assert fs.x[0, flagged] == pytest.approx(3.0)
+        assert fs.x[0, risk] == pytest.approx(0.785)
+        # 2 flagged members, not 3 total members.
+        assert fs.x[0, flagged] == pytest.approx(2.0)
+
+    def test_flagged_members_does_not_duplicate_community_size(self):
+        """flagged_member_count comes from details, not len(account_ids).
+
+        Using the account_ids length would make column 12 a copy of column 10.
+        """
+        nodes = [
+            _node("a", community_id="cafe12345678"),
+            _node("b", community_id="cafe12345678"),
+            _node("c", community_id="cafe12345678"),
+        ]
+        flags = [
+            {
+                "flag_type": "COMMUNITY",
+                "risk_level": "medium",
+                "risk_score": 0.5,
+                "account_ids": ["a", "b", "c"],
+                "details": {"community_id": "cafe12345678", "flagged_member_count": 1},
+            }
+        ]
+        fs = _assemble(nodes, [], flags=flags)
+        size = fs.x[0, fs.feature_names.index("community_size")]
+        flagged = fs.x[0, fs.feature_names.index("community_flagged_members")]
+
+        assert size == pytest.approx(3.0)
+        assert flagged == pytest.approx(1.0)
+        assert size != flagged
+
+    def test_missing_flagged_member_count_is_zero(self):
+        nodes = [_node("a", community_id="cafe12345678")]
+        flags = [
+            {
+                "flag_type": "COMMUNITY",
+                "risk_level": "medium",
+                "risk_score": 0.5,
+                "account_ids": ["a"],
+                "details": {"community_id": "cafe12345678"},
+            }
+        ]
+        fs = _assemble(nodes, [], flags=flags)
+        assert fs.x[0, fs.feature_names.index("community_flagged_members")] == pytest.approx(0.0)
 
     def test_details_as_json_string_is_parsed(self):
         """asyncpg hands back JSONB as str unless a codec is registered."""
@@ -249,10 +291,10 @@ class TestWeakLabels:
         assert fs.labelled_mask.sum() == 1
 
     def test_multiple_flags_take_the_highest_level(self):
-        """A critical cycle must not be diluted by a medium community flag."""
+        """A critical cycle must not be diluted by a medium one."""
         flags = [
             {
-                "flag_type": "COMMUNITY",
+                "flag_type": "CYCLE",
                 "risk_level": "medium",
                 "risk_score": 40.0,
                 "account_ids": ["a"],
@@ -268,6 +310,52 @@ class TestWeakLabels:
         ]
         fs = _assemble([_node("a")], [], flags=flags)
         assert fs.y[0] == 3
+
+    def test_community_flags_never_produce_labels(self):
+        """The leakage fix: COMMUNITY risk_level must not become y.
+
+        score_community derives risk_level from risk_score by threshold, and
+        risk_score is feature column 11 — so labelling from COMMUNITY hands the
+        model its own answer.
+        """
+        flags = [
+            {
+                "flag_type": "COMMUNITY",
+                "risk_level": "critical",
+                "risk_score": 0.95,
+                "account_ids": ["a"],
+                "details": {"community_id": "deadbeef1234"},
+            }
+        ]
+        fs = _assemble([_node("a", community_id="deadbeef1234")], [], flags=flags)
+
+        assert fs.y[0] == 0
+        assert not fs.labelled_mask[0]
+        # The community features still populate — Louvain stays a feature provider.
+        assert fs.x[0, fs.feature_names.index("community_risk_score")] == pytest.approx(0.95)
+
+    def test_community_flag_does_not_mask_a_cycle_label(self):
+        """A CYCLE label still lands when a COMMUNITY flag is also present."""
+        flags = [
+            {
+                "flag_type": "COMMUNITY",
+                "risk_level": "critical",
+                "risk_score": 0.95,
+                "account_ids": ["a"],
+                "details": {"community_id": "deadbeef1234"},
+            },
+            {
+                "flag_type": "CYCLE",
+                "risk_level": "high",
+                "risk_score": 80.0,
+                "account_ids": ["a"],
+                "details": {},
+            },
+        ]
+        fs = _assemble([_node("a", community_id="deadbeef1234")], [], flags=flags)
+
+        assert fs.y[0] == 2          # from CYCLE, not the critical COMMUNITY flag
+        assert fs.labelled_mask[0]
 
     def test_labels_stay_in_class_range(self):
         flags = [
