@@ -419,6 +419,71 @@ class Neo4jClient:
             logger.error(f"Failed to export FLOWS_TO edges: {e}")
             raise
 
+    async def export_account_nodes(
+        self,
+        query_timeout_seconds: float = LOUVAIN_EXPORT_TIMEOUT_SECONDS,
+    ) -> List[Dict[str, Any]]:
+        """
+        Export every graph node with the properties the GNN features read.
+
+        Companion to export_flows_to_edges: that gives the edges, this gives
+        the nodes. Together they are everything the feature builder needs from
+        Neo4j.
+
+        `labels` comes back so node type can be one-hot encoded. Today the
+        consumer only ever MERGEs `:Account` (see upsert_transaction_graph),
+        so Merchant/Bank/Exchange will be empty until something creates them.
+
+        kyc_tier / risk_score / country / account_age / cumulative_volume are
+        returned even though nothing populates them yet — create_account_node
+        is the only writer and is never called in production. They come back
+        as None, the feature builder skips them, and they start contributing
+        automatically once ingestion fills them in.
+
+        Returns:
+            List of dicts, one per node, keyed by property name.
+        """
+        query = """
+        MATCH (n)
+        WHERE n:Account OR n:Merchant OR n:Bank OR n:Exchange
+        RETURN n.id                AS id,
+               labels(n)           AS labels,
+               n.pagerank_score    AS pagerank_score,
+               n.community_id      AS community_id,
+               n.created_at        AS created_at,
+               n.kyc_tier          AS kyc_tier,
+               n.risk_score        AS risk_score,
+               n.country           AS country,
+               n.account_age       AS account_age,
+               n.cumulative_volume AS cumulative_volume
+        """
+        # Same reasoning as export_flows_to_edges: a full-graph scan may run
+        # long but must stay bounded.
+        timed_query = Query(query, timeout=query_timeout_seconds)
+
+        try:
+            async with self.driver.session(database=NEO4J_DATABASE) as session:
+                result = await session.run(timed_query)
+                return [
+                    {
+                        "id":                record["id"],
+                        "labels":            list(record["labels"] or []),
+                        "pagerank_score":    record["pagerank_score"],
+                        "community_id":      record["community_id"],
+                        "created_at":        record["created_at"],
+                        "kyc_tier":          record["kyc_tier"],
+                        "risk_score":        record["risk_score"],
+                        "country":           record["country"],
+                        "account_age":       record["account_age"],
+                        "cumulative_volume": record["cumulative_volume"],
+                    }
+                    async for record in result
+                    if record["id"]
+                ]
+        except Exception as e:
+            logger.error(f"Failed to export account nodes: {e}")
+            raise
+
     async def write_community_assignments(
         self,
         assignments: Dict[str, str],
