@@ -1,0 +1,53 @@
+# GNN training stack for the risk classifier (GraphSAGE node classification).
+#
+# Deliberately kept OUT of requirements.txt: torch is ~1-2GB installed, and the
+# Faust consumer and outbox worker never import it. Install both files for
+# training and feature-extraction work:
+#
+#     pip install -r requirements.txt -r requirements-ml.txt
+#
+# Every pin here is the newest release that still ships a Python 3.9 wheel, so
+# this file is a hard ceiling until the runtime moves off 3.9. For reference,
+# current-latest is well ahead: torch 2.13, torch_geometric 2.8, scikit-learn
+# 1.9, imbalanced-learn 0.14, scipy 1.18 — all of them require >=3.10.
+# The 3.9 upgrade is blocked on migrating faust 1.10.4 (abandoned; breaks on
+# 3.10+) to faust-streaming (requires >=3.10). It is NOT blocked on torch.
+
+# Tensors + autograd. CPU/MPS build straight from PyPI — on macOS arm64 the
+# default wheel is already the Apple Silicon one
+# (torch-2.8.0-cp39-none-macosx_11_0_arm64.whl).
+# Do NOT add a CUDA --index-url pin here: those wheels will not install on the
+# Mac used for development. A GPU box needs its own overlay file.
+torch==2.8.0
+
+# GraphSAGE (SAGEConv), neighbour sampling, and the Data / HeteroData graph
+# containers that the feature-assembly layer will emit.
+# Pure-Python wheel (py3-none-any) — it rides whatever torch is installed.
+#
+# torch-scatter and torch-sparse are intentionally NOT included. PyG 2.x has
+# native torch fallbacks for every op SAGEConv needs, while those two must be
+# compiled against an exact torch version and are a common install trap.
+torch_geometric==2.6.1
+
+# Train/test splitting, feature scaling, and the precision / recall / PR-AUC
+# metrics the fraud class is scored on. Also the dependency imbalanced-learn
+# builds against. 1.6.1 is the last release supporting Python 3.9.
+#
+# Must stay <1.7 while imbalanced-learn is 0.12.4 — see the note below.
+scikit-learn==1.6.1
+
+# SMOTE over node feature vectors, to counter fraud-class imbalance before
+# training. 0.12.4 is the last release supporting Python 3.9.
+#
+# CAUTION for whoever bumps the runtime: 0.12.4 calls sklearn's _validate_data
+# and _more_tags, which are deprecated in sklearn 1.6 (they emit warnings today)
+# and REMOVED in 1.7. Raising scikit-learn past 1.6.x therefore requires
+# raising imbalanced-learn in the same commit, not separately.
+imbalanced-learn==0.12.4
+
+# Pulled in transitively by scikit-learn; pinned explicitly so installs are
+# reproducible. 1.13.1 is the last release supporting Python 3.9.
+scipy==1.13.1
+
+# Not listed because it needs no dependency: Focal Loss (gamma=2.0, alpha=0.25)
+# is implemented directly against torch in the model package.
