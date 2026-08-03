@@ -308,6 +308,95 @@ class TestSelfLoops:
         assert fs.x[0, col["out_degree"]] == pytest.approx(1.0)
 
 
+class TestDerivedFeatures:
+    """Scale-free ratios. Laundering shows in the shape of activity, not size."""
+
+    def test_avg_amount_is_total_over_count(self):
+        fs = _assemble(
+            [_node("a"), _node("b")], [_edge("a", "b", 1_000.0, 20)]
+        )
+        col = {name: i for i, name in enumerate(fs.feature_names)}
+        a = fs.node_ids.index("a")
+        b = fs.node_ids.index("b")
+
+        assert fs.x[a, col["avg_out_amount"]] == pytest.approx(50.0)
+        assert fs.x[b, col["avg_in_amount"]] == pytest.approx(50.0)
+
+    def test_smurfing_and_treasury_differ_despite_equal_volume(self):
+        """The reason these columns exist.
+
+        Both move 100,000 to one counterparty; only the transaction shape
+        separates them, and the raw totals cannot.
+        """
+        edges = [
+            _edge("smurf", "dst1", 100_000.0, 500),    # many tiny transfers
+            _edge("treasury", "dst2", 100_000.0, 2),   # two large ones
+        ]
+        nodes = [_node(n) for n in ("smurf", "treasury", "dst1", "dst2")]
+        fs = _assemble(nodes, edges)
+        col = fs.feature_names.index("avg_out_amount")
+
+        smurf = fs.x[fs.node_ids.index("smurf"), col]
+        treasury = fs.x[fs.node_ids.index("treasury"), col]
+
+        assert smurf == pytest.approx(200.0)
+        assert treasury == pytest.approx(50_000.0)
+        assert treasury > smurf * 100
+
+    def test_degree_ratio_separates_fan_out_from_fan_in(self):
+        edges = [
+            _edge("source", "m1", 10.0, 1),
+            _edge("source", "m2", 10.0, 1),
+            _edge("c1", "sink", 10.0, 1),
+            _edge("c2", "sink", 10.0, 1),
+        ]
+        nodes = [_node(n) for n in ("source", "sink", "m1", "m2", "c1", "c2")]
+        fs = _assemble(nodes, edges)
+        col = fs.feature_names.index("degree_ratio")
+
+        assert fs.x[fs.node_ids.index("source"), col] == pytest.approx(1.0)
+        assert fs.x[fs.node_ids.index("sink"), col] == pytest.approx(0.0)
+
+    def test_tx_per_counterparty_detects_repetition(self):
+        """Fifty transfers to one partner differs from one each to fifty."""
+        repeated = [_edge("rep", "partner", 500.0, 50)]
+        spread = [_edge("spread", f"p{i}", 10.0, 1) for i in range(50)]
+        nodes = [_node("rep"), _node("partner"), _node("spread")]
+        nodes += [_node(f"p{i}") for i in range(50)]
+        fs = _assemble(nodes, repeated + spread)
+        col = fs.feature_names.index("tx_per_counterparty")
+
+        assert fs.x[fs.node_ids.index("rep"), col] == pytest.approx(50.0)
+        assert fs.x[fs.node_ids.index("spread"), col] == pytest.approx(1.0)
+
+    def test_burst_ratio_from_redis_windows(self):
+        volumes = {
+            "a": {
+                "txn_out_1h": 8.0, "txn_in_1h": 2.0,
+                "txn_out_24h": 16.0, "txn_in_24h": 4.0,
+                "txn_out_7d": 40.0, "txn_in_7d": 10.0,
+            }
+        }
+        fs = _assemble([_node("a")], [], volumes=volumes)
+        col = {name: i for i, name in enumerate(fs.feature_names)}
+
+        # 10 of the day's 20 transactions fell in one hour.
+        assert fs.x[0, col["burst_1h_24h"]] == pytest.approx(0.5)
+        # 20 of the week's 50.
+        assert fs.x[0, col["burst_24h_7d"]] == pytest.approx(0.4)
+
+    def test_zero_denominators_give_zero_not_nan(self):
+        """A NaN anywhere poisons the entire training run."""
+        fs = _assemble([_node("alone")], [])
+        for name in (
+            "avg_out_amount", "avg_in_amount", "degree_ratio",
+            "tx_per_counterparty", "burst_1h_24h", "burst_24h_7d",
+            "amount_per_degree",
+        ):
+            assert fs.x[0, fs.feature_names.index(name)] == pytest.approx(0.0)
+        assert np.isfinite(fs.x).all()
+
+
 class TestCommunityFeatures:
     def test_community_size_counts_members(self):
         nodes = [

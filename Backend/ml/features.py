@@ -78,6 +78,24 @@ SELF_LOOP_FEATURES: Tuple[str, ...] = (
     "self_loop_amount",
 )
 
+# Ratios derived from the raw aggregates. All are scale-free, which is the
+# point: laundering shows up in the SHAPE of activity, not its magnitude. A
+# smurfing account and a corporate treasury can move identical totals; what
+# separates them is many small transfers in bursts versus few large ones.
+#
+# Every one of these is computable from columns already present, so they add no
+# I/O. They are separable from GRAPH_FEATURES so their contribution can be
+# measured rather than assumed.
+DERIVED_FEATURES: Tuple[str, ...] = (
+    "avg_out_amount",       # total_out / out_tx_count — smurfing runs small
+    "avg_in_amount",
+    "degree_ratio",         # out_degree / (in + out) — fan-out vs fan-in shape
+    "tx_per_counterparty",  # repetition with the same partner
+    "burst_1h_24h",         # share of a day's activity inside one hour
+    "burst_24h_7d",         # share of a week's activity inside one day
+    "amount_per_degree",    # volume concentration across counterparties
+)
+
 # Louvain output, as derived stats rather than the community_id itself. The id
 # is fingerprint[:12] — a hex hash with no numeric meaning, and every re-run
 # reshuffles it, so a model keyed on it would learn noise. These three stay
@@ -424,11 +442,57 @@ class FeatureBuilder:
         for prop in OPTIONAL_NODE_PROPERTY_FEATURES:
             frame[prop] = self._numeric_column(nodes_df, prop, num_nodes)
 
+        # ---- derived ratios --------------------------------------------------
+        # Guarded division throughout: an account with no outgoing edges has a
+        # zero denominator, and a NaN anywhere poisons the whole training run.
+        def _safe_ratio(numerator: pd.Series, denominator: pd.Series) -> np.ndarray:
+            num = numerator.to_numpy(dtype="float64")
+            den = denominator.to_numpy(dtype="float64")
+            return np.divide(num, den, out=np.zeros_like(num), where=den > 0)
+
+        frame["avg_out_amount"] = _safe_ratio(
+            frame["total_out_amount"], frame["out_tx_count"]
+        )
+        frame["avg_in_amount"] = _safe_ratio(
+            frame["total_in_amount"], frame["in_tx_count"]
+        )
+        frame["degree_ratio"] = _safe_ratio(
+            frame["out_degree"], frame["out_degree"] + frame["in_degree"]
+        )
+        frame["tx_per_counterparty"] = _safe_ratio(
+            frame["out_tx_count"] + frame["in_tx_count"],
+            frame["out_degree"] + frame["in_degree"],
+        )
+
+        label_1h = _window_label(int(windows_hours[0])) if windows_hours else None
+        day_label = "24h" if 24 in [int(h) for h in windows_hours] else None
+        week_label = "7d" if 168 in [int(h) for h in windows_hours] else None
+
+        if label_1h and day_label:
+            hour_total = frame[f"txn_out_{label_1h}"] + frame[f"txn_in_{label_1h}"]
+            day_total = frame[f"txn_out_{day_label}"] + frame[f"txn_in_{day_label}"]
+            frame["burst_1h_24h"] = _safe_ratio(hour_total, day_total)
+        else:
+            frame["burst_1h_24h"] = 0.0
+
+        if day_label and week_label:
+            day_total = frame[f"txn_out_{day_label}"] + frame[f"txn_in_{day_label}"]
+            week_total = frame[f"txn_out_{week_label}"] + frame[f"txn_in_{week_label}"]
+            frame["burst_24h_7d"] = _safe_ratio(day_total, week_total)
+        else:
+            frame["burst_24h_7d"] = 0.0
+
+        frame["amount_per_degree"] = _safe_ratio(
+            frame["total_out_amount"] + frame["total_in_amount"],
+            frame["out_degree"] + frame["in_degree"],
+        )
+
         self._warn_about_unused_properties(nodes_df)
 
         feature_names = (
             list(GRAPH_FEATURES)
             + list(SELF_LOOP_FEATURES)
+            + list(DERIVED_FEATURES)
             + list(COMMUNITY_FEATURES)
             + volume_features
             + list(NODE_TYPE_FEATURES)
@@ -648,6 +712,7 @@ class FeatureBuilder:
         feature_names = (
             list(GRAPH_FEATURES)
             + list(SELF_LOOP_FEATURES)
+            + list(DERIVED_FEATURES)
             + list(COMMUNITY_FEATURES)
             + volume_features
             + list(NODE_TYPE_FEATURES)
