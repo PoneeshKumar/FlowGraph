@@ -158,6 +158,9 @@ class TrainConfig:
     train_frac: float = 0.70
     val_frac: float = 0.15
     label_source: str = "ground_truth"
+    # "temporal" is the reportable split. "random" is a diagnostic that
+    # deliberately breaks chronology — see ml.split.random_split.
+    split_strategy: str = "temporal"
 
 
 @dataclass
@@ -216,16 +219,26 @@ def train_model(
     )
 
     # ---- split ----------------------------------------------------------
-    if feature_set.node_first_ts is None:
-        raise ValueError(
-            "FeatureSet has no node_first_ts — a chronological split needs one. "
-            "Rebuild the cache with --refresh-cache."
+    if config.split_strategy == "random":
+        from ml.split import random_split
+
+        masks = random_split(
+            len(labels),
+            train_frac=config.train_frac,
+            val_frac=config.val_frac,
+            seed=config.seed,
         )
-    masks = temporal_split(
-        feature_set.node_first_ts,
-        train_frac=config.train_frac,
-        val_frac=config.val_frac,
-    )
+    else:
+        if feature_set.node_first_ts is None:
+            raise ValueError(
+                "FeatureSet has no node_first_ts — a chronological split needs "
+                "one. Rebuild the cache with --refresh-cache."
+            )
+        masks = temporal_split(
+            feature_set.node_first_ts,
+            train_frac=config.train_frac,
+            val_frac=config.val_frac,
+        )
     split_summary = masks.summary(positives)
     logger.info("Split: %s", split_summary)
 
@@ -503,6 +516,11 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--label-source", default="ground_truth", choices=["ground_truth", "weak"]
     )
+    parser.add_argument(
+        "--split", default="temporal", choices=["temporal", "random"],
+        help="'random' is a diagnostic only — it breaks chronology and its "
+             "numbers must not be reported as model performance",
+    )
 
     parser.add_argument("--window-days", type=int, default=2_000)
     parser.add_argument("--anchor-percentile", type=float, default=0.999)
@@ -568,6 +586,7 @@ def main() -> int:
         train_frac=args.train_frac,
         val_frac=args.val_frac,
         label_source=args.label_source,
+        split_strategy=args.split,
     )
 
     model, result = train_model(feature_set, ground_truth, config)

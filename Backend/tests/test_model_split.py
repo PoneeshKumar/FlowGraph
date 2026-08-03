@@ -184,6 +184,42 @@ class TestTemporalSplit:
             temporal_split(np.array([np.nan, 0.0, -5.0]))
 
 
+class TestRandomSplit:
+    """Diagnostic split. Exists to separate 'model cannot learn' from
+    'the chronological split creates distribution shift'."""
+
+    def test_splits_are_disjoint_and_complete(self):
+        from ml.split import random_split
+
+        masks = random_split(1_000, train_frac=0.7, val_frac=0.15, seed=1)
+
+        assert not (masks.train & masks.val).any()
+        assert not (masks.train & masks.test).any()
+        assert not (masks.val & masks.test).any()
+        assert (masks.train | masks.val | masks.test).all()
+
+    def test_is_reproducible(self):
+        from ml.split import random_split
+
+        first = random_split(500, seed=7)
+        second = random_split(500, seed=7)
+        assert np.array_equal(first.train, second.train)
+
+    def test_ignores_chronology(self):
+        """Unlike temporal_split, later nodes must land in train too."""
+        from ml.split import random_split
+
+        masks = random_split(1_000, seed=3)
+        # The last decile of node indices should not be confined to test.
+        assert masks.train[900:].any()
+
+    def test_rejects_impossible_fractions(self):
+        from ml.split import random_split
+
+        with pytest.raises(ValueError):
+            random_split(100, train_frac=0.9, val_frac=0.2)
+
+
 class TestFeatureScaler:
     def test_fits_on_train_rows_only(self):
         """The leakage guard. Test rows must not move the fitted statistics."""

@@ -164,6 +164,45 @@ class FeatureScaler:
         return self.fit(x, train_mask).transform(x)
 
 
+def random_split(
+    num_nodes: int,
+    train_frac: float = 0.70,
+    val_frac: float = 0.15,
+    seed: int = 42,
+) -> SplitMasks:
+    """Uniformly random node split. A DIAGNOSTIC, not a reporting split.
+
+    This is deliberately the methodologically wrong choice for payment data:
+    it lets the model learn from the future to predict the past. It exists so
+    the temporal result can be interpreted. If random scores far higher than
+    chronological, the gap measures distribution shift between early- and
+    late-appearing accounts; if both are equally poor, the features simply do
+    not separate the classes. Those call for completely different fixes, and
+    without this comparison you cannot tell them apart.
+
+    Never quote a number from here as the model's performance.
+    """
+    if train_frac + val_frac >= 1.0:
+        raise ValueError("train_frac + val_frac must leave room for test")
+
+    rng = np.random.default_rng(seed)
+    order = rng.permutation(num_nodes)
+    train_end = int(num_nodes * train_frac)
+    val_end = int(num_nodes * (train_frac + val_frac))
+
+    train = np.zeros(num_nodes, dtype=bool)
+    val = np.zeros(num_nodes, dtype=bool)
+    test = np.zeros(num_nodes, dtype=bool)
+    train[order[:train_end]] = True
+    val[order[train_end:val_end]] = True
+    test[order[val_end:]] = True
+
+    logger.warning(
+        "RANDOM split in use — diagnostic only, not a reportable evaluation"
+    )
+    return SplitMasks(train=train, val=val, test=test, cutoffs=(float("nan"),) * 2)
+
+
 def binary_labels_from_mask(positive_mask: np.ndarray) -> np.ndarray:
     """Ground-truth boolean -> int64 class indices for the loss."""
     return np.asarray(positive_mask, dtype=bool).astype(np.int64)
