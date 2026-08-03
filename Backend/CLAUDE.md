@@ -29,15 +29,15 @@ Payment events → Kafka → Python consumer (Faust)
 **Done and verified:**
 - Kafka ingestion
 - Python consumer (Faust)
-
-**In progress:**
-- Storage layer (Postgres + Neo4j + Redis dual-write)
+- Storage layer (Postgres + Neo4j + Redis dual-write, outbox worker)
+- Graph algorithm engine (cycle detection, PageRank, Louvain/Leiden)
+- GNN layer — features, training, evaluation, inference. Trained model in
+  `ml/runs/v2_derived_h128`; numbers and limitations in `ml/RESULTS.md`.
 
 **Not started:**
-- Graph algorithm engine
-- AI enrichment layer
-- Query API
-- Frontend
+- AI enrichment layer (Claude explainability for low-confidence cases)
+- Query API (`shortest_path_between`, `subgraph_around`, `flow_between`)
+- Frontend wiring (Vite app exists, not connected to a backend)
 
 ## Stack
 
