@@ -178,6 +178,9 @@ class TrainResult:
     split_summary: str = ""
     model_summary: List[str] = field(default_factory=list)
     feature_names: List[str] = field(default_factory=list)
+    # Fitted scaler statistics. Saved with the model because a checkpoint
+    # without them cannot score anything correctly.
+    scaler: Dict[str, Any] = field(default_factory=dict)
 
 
 # ---------------------------------------------------------------------------
@@ -379,6 +382,16 @@ def train_model(
         feature_set.node_ids, predictions, feature_set.labelled_mask, ground_truth
     )
 
+    # The scaler statistics are part of the trained artefact, not a training
+    # detail. A checkpoint without them is unusable: inference would feed raw
+    # 1e14-scale amounts into weights fitted on standardized inputs and return
+    # confident nonsense.
+    result_scaler = {
+        "mean": scaler.mean_.tolist(),
+        "std": scaler.std_.tolist(),
+        "use_log": scaler.use_log,
+    }
+
     result = TrainResult(
         config=asdict(config),
         best_epoch=best_epoch,
@@ -393,6 +406,7 @@ def train_model(
         split_summary=split_summary,
         model_summary=model.describe(),
         feature_names=list(feature_set.feature_names),
+        scaler=result_scaler,
     )
     return model, result
 
