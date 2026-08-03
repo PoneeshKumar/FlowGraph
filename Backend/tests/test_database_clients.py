@@ -269,7 +269,12 @@ class TestNeo4jClient:
 
         result = await client.compute_local_pagerank(["acct_a", "acct_b"])
 
-        assert result == {}
+        # No edges came back, but the requested accounts are still seeded into
+        # the adjacency map, so PageRank distributes mass uniformly over them
+        # rather than returning nothing. The old expectation of {} predated
+        # that seeding.
+        assert set(result) == {"acct_a", "acct_b"}
+        assert sum(result.values()) == pytest.approx(1.0, abs=1e-6)
         assert query_calls, "PageRank query should be executed"
         query, kwargs = query_calls[0]
         assert "FLOWS_TO" in query

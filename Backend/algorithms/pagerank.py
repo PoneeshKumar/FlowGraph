@@ -12,8 +12,11 @@ def _normalize_adjacency(adjacency: Mapping[str, Mapping[str, float]] | Sequence
     if adjacency is None:
         raise ValueError("adjacency cannot be None")
 
-    # Prefer explicit Mapping check to satisfy static type checkers
-    if isinstance(adjacency, Mapping):
+    # Duck-typed on .items() rather than isinstance(Mapping): a pandas Series
+    # is mapping-LIKE and has .items(), but is not a Mapping subclass. Falling
+    # through to list() would iterate its VALUES rather than (index, value)
+    # pairs, and the unpack below would then fail on a perfectly valid input.
+    if hasattr(adjacency, "items") and callable(adjacency.items):
         items = adjacency.items()
     else:
         try:
