@@ -18,11 +18,56 @@ from ml.features import (
     GRAPH_FEATURES,
     NODE_TYPE_FEATURES,
     NUM_CLASSES,
+    STRUCTURAL_FEATURES,
     FeatureBuilder,
 )
 
 
 REF = datetime(2026, 7, 29, 12, 0, 0, tzinfo=timezone.utc)
+
+
+class TestStructuralFeatures:
+    """k-core, triangles, reciprocity computed from the directed edge index —
+    the higher-order structure a linear GNN cannot derive."""
+
+    def test_kcore_of_a_triangle_is_two(self):
+        # 0<->1<->2<->0 : every node has two neighbours in a 2-core.
+        src = np.array([0, 1, 2], dtype=np.int64)
+        dst = np.array([1, 2, 0], dtype=np.int64)
+        feats = FeatureBuilder._structural_features(src, dst, 3)
+        assert feats["kcore"].tolist() == [2.0, 2.0, 2.0]
+        # one closed triangle, shared by all three nodes
+        assert np.allclose(feats["log_triangles"], np.log1p(1.0))
+        assert np.allclose(feats["clustering"], 1.0)
+
+    def test_kcore_of_a_path_is_one(self):
+        # 0->1->2->3 : a path has coreness 1 everywhere.
+        src = np.array([0, 1, 2], dtype=np.int64)
+        dst = np.array([1, 2, 3], dtype=np.int64)
+        feats = FeatureBuilder._structural_features(src, dst, 4)
+        assert feats["kcore"].tolist() == [1.0, 1.0, 1.0, 1.0]
+        assert np.allclose(feats["log_triangles"], 0.0)  # no triangles in a path
+
+    def test_reciprocity_counts_mutual_edges(self):
+        # 0<->1 reciprocated; 1->2 one-way.
+        src = np.array([0, 1, 1], dtype=np.int64)
+        dst = np.array([1, 0, 2], dtype=np.int64)
+        feats = FeatureBuilder._structural_features(src, dst, 3)
+        # node 0: only counterparty (1) pays back -> 1.0
+        assert feats["reciprocity"][0] == 1.0
+        # node 1: two counterparties (0, 2), one reciprocates -> 0.5
+        assert feats["reciprocity"][1] == 0.5
+        # node 2: its one counterparty (1) never pays it back -> 0.0
+        assert feats["reciprocity"][2] == 0.0
+
+    def test_empty_graph_returns_zeros_of_right_width(self):
+        feats = FeatureBuilder._structural_features(
+            np.array([], dtype=np.int64), np.array([], dtype=np.int64), 5
+        )
+        assert set(feats) == set(STRUCTURAL_FEATURES)
+        for name in STRUCTURAL_FEATURES:
+            assert feats[name].shape == (5,)
+            assert np.all(feats[name] == 0.0)
 
 
 def _node(
