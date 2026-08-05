@@ -23,7 +23,8 @@ positives; every row same regularization, seed 42):
 | **+ structural features (k-core, …)** | 0.3419 | 0.4092 | 0.9778 |
 
 **Test PR-AUC 0.057 → 0.41 (~7×), test ROC 0.94 → 0.98, test precision 0.04 →
-0.54.** Note validation barely moves for the quantile change: its entire benefit
+0.54** — and widening the champion to hidden 192 takes it to **0.42 / 0.56**.
+Note validation barely moves for the quantile change: its entire benefit
 lives on the shifted future, so it is invisible to a validation-only sweep and
 has to be read on test. That is also why the earlier "remove regularization →
 val 0.44" result was a trap — that config scored test ROC 0.50, pure memorization
@@ -63,52 +64,63 @@ Whole-graph coreness is one O(E) peel, cheap at build time.
   volume is already carried in node features.
 - **Dropping the sign-flipping features** was neutral — quantile normalization
   keeps their (validation-useful) signal while making them shift-robust.
+- **Ensembling** barely moved the needle. A 3-seed average gained +0.007 test
+  PR-AUC (0.400 → 0.407) — the members are too correlated, because quantile
+  normalization and the structural features left the model low-variance across
+  seeds. A capacity-*diverse* ensemble (h128 + h192) was worse still: averaging
+  in the weaker h128 members *diluted* the stronger h192 (0.415 < 0.422). Not
+  worth K× inference. Capacity, not ensembling, was the remaining lever.
 
-## Champion — `ml/runs/v4_structural`
+## Champion — `ml/runs/v5_h192`
 
-Bidirectional GraphSAGE (hidden 128, 2 layers, dropout 0.3), quantile scaler,
-43 features (38 + 5 structural), Focal Loss (γ=2).
+Bidirectional GraphSAGE (hidden 192, 2 layers, dropout 0.3), quantile scaler,
+43 features (38 + 5 structural), Focal Loss (γ=2). Widening from hidden 128 to
+192 was the last clean single-model gain (test PR-AUC 0.40 → 0.42); beyond it,
+capacity plateaus and overfitting risk climbs.
 
 ```
-best val PR-AUC 0.3403
-TEST   PR-AUC 0.4002   ROC-AUC 0.9751
-       precision 0.539   recall 0.350   F1 0.424
-       TP 144  FP 123  FN 268  support 412  (test prevalence 0.32%)
+best val PR-AUC 0.3478
+TEST   PR-AUC 0.4216   ROC-AUC 0.9769
+       precision 0.562   recall 0.362   F1 0.440
+       TP 149  FP 116  FN 263  support 412  (test prevalence 0.32%)
 ```
 
-At 0.32% test prevalence a random ranker scores PR-AUC ≈ 0.003, so 0.40 is ~130×
+At 0.32% test prevalence a random ranker scores PR-AUC ≈ 0.003, so 0.42 is ~140×
 better than random, and `precision@8` on the full graph is 100% (162× lift over
-the 0.617% base rate). Test precision rose from the old model's 0.041 to 0.539 —
+the 0.617% base rate). Test precision rose from the old model's 0.041 to 0.562 —
 of the accounts it flags at the operating threshold, more than half are real.
+The hidden-128 variant (`v4_structural`, test PR-AUC 0.40) is a ~2× cheaper
+alternative if inference cost matters.
 
 ### Recall by typology (whole graph, at the chosen threshold)
 
 | typology | recall | caught / support | reachable by cycle detection? |
 |---|---|---|---|
-| SCATTER-GATHER | 65.0% | 240 / 369 | no |
-| GATHER-SCATTER | 47.0% | 322 / 685 | no |
-| CYCLE | 46.9% | 127 / 271 | yes |
-| RANDOM | 46.0% | 97 / 211 | no |
+| SCATTER-GATHER | 64.8% | 239 / 369 | no |
+| GATHER-SCATTER | 50.8% | 348 / 685 | no |
+| CYCLE | 43.9% | 119 / 271 | yes |
+| RANDOM | 38.9% | 82 / 211 | no |
 | FAN-OUT | 35.9% | 129 / 359 | no |
-| FAN-IN | 21.3% | 72 / 338 | no |
-| STACK | 18.1% | 120 / 663 | no |
-| BIPARTITE | 10.0% | 49 / 491 | no |
+| FAN-IN | 18.3% | 62 / 338 | no |
+| STACK | 17.0% | 113 / 663 | no |
+| BIPARTITE | 9.8% | 48 / 491 | no |
 
-Every typology improved over the bidir+quantile model; the structural features
-lift the loop-free typologies (STACK 11→18%, FAN-IN 13→21%) as well as CYCLE
-(33→47%). The model still scores highest on the SCATTER/GATHER typologies —
-structures with no closed loop that depth-limited cycle search cannot represent
-at any depth. That is the case for the GNN existing.
+The structural features lift the loop-free typologies (STACK, FAN-IN) as well as
+CYCLE over the pre-structural model. The GNN scores highest on the SCATTER/GATHER
+typologies — structures with no closed loop that depth-limited cycle search
+cannot represent at any depth. That is the case for the GNN existing. (Whole-graph
+recall at the F1 threshold is a slice through one operating point; the champion is
+chosen on threshold-free PR-AUC, where h192 dominates every alternative.)
 
 ### vs the detectors
 
 | | recall |
 |---|---|
-| GNN | **33.2%** |
+| GNN | **32.4%** |
 | cycle + Louvain detectors | 3.9% |
 
-979 accounts flagged by the GNN alone, missed by every detector, confirmed by
-ground truth (was 674, and 547 before that).
+959 accounts flagged by the GNN alone, missed by every detector, confirmed by
+ground truth (was 674 at hidden 128, and 547 before quantile/structural).
 
 ## Reproducing
 
@@ -122,10 +134,10 @@ python3 -m ml.datasets.run_louvain                                # ~4 min
 python3 -m ml.train --refresh-cache --cache ml/cache/featureset_v3.npz \
     --scaler quantile --bidirectional \
     --train-frac 0.60 --val-frac 0.15 \
-    --hidden 128 --dropout 0.3 --lr 0.01 --gamma 2.0 \
-    --epochs 220 --patience 55 --run-name v4_structural
+    --hidden 192 --dropout 0.3 --lr 0.01 --gamma 2.0 \
+    --epochs 320 --patience 80 --run-name v5_h192
 python3 -m ml.sweep --preset shift --cache ml/cache/featureset_v3.npz   # the ablation
-python3 -m ml.predict --run ml/runs/v4_structural --cache ml/cache/featureset_v3.npz --top 20
+python3 -m ml.predict --run ml/runs/v5_h192 --cache ml/cache/featureset_v3.npz --top 20
 ```
 
 ## Honest limitations
@@ -145,9 +157,12 @@ python3 -m ml.predict --run ml/runs/v4_structural --cache ml/cache/featureset_v3
    is the steadier read.
 
 ## Worth doing next
-1. Score-averaged ensemble across seeds — cheap variance reduction.
-2. Time-bounded features so the temporal evaluation is real.
-3. Mini-batch neighbour sampling for many more gradient steps (champion peaked at
-   epoch 213 of 220 — it still wanted to train).
-4. More structural motifs targeting the weakest typologies (BIPARTITE 10%,
-   STACK 18%) — e.g. 2-hop fan-out reach, bipartite-core membership.
+1. More structural motifs targeting the weakest typologies (BIPARTITE 10%,
+   STACK 17%) — e.g. 2-hop fan-out reach, bipartite-core membership. Structural
+   features were the single biggest lever, so this is the most promising thread.
+2. Time-bounded features so the temporal evaluation is real (the split separates
+   accounts, not time).
+3. Mini-batch neighbour sampling for many more gradient steps — full-batch is one
+   step per epoch, and the champion still wanted to train at the cap.
+
+(Ensembling was tried and did not pay off — see "What did NOT help".)
