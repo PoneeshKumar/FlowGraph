@@ -154,12 +154,19 @@ def main() -> int:
             "the cache the model was trained on."
         )
 
-    mean = np.asarray(scaler_state["mean"], dtype="float64")
-    std = np.asarray(scaler_state["std"], dtype="float64")
-    x = feature_set.x.astype("float64")
-    if scaler_state.get("use_log", True):
-        x = np.sign(x) * np.log1p(np.abs(x))
-    x = ((x - mean) / std).astype(np.float32)
+    if scaler_state.get("kind") == "quantile":
+        # Rebuild the fitted rank-normalizer from its saved quantiles and apply
+        # it exactly as at training time — never re-fit on inference data.
+        from ml.split import QuantileScaler
+
+        x = QuantileScaler.from_state(scaler_state).transform(feature_set.x)
+    else:
+        mean = np.asarray(scaler_state["mean"], dtype="float64")
+        std = np.asarray(scaler_state["std"], dtype="float64")
+        x = feature_set.x.astype("float64")
+        if scaler_state.get("use_log", True):
+            x = np.sign(x) * np.log1p(np.abs(x))
+        x = ((x - mean) / std).astype(np.float32)
 
     model = GraphSAGERiskClassifier(
         in_channels=feature_set.num_features,
@@ -168,6 +175,7 @@ def main() -> int:
         num_layers=config["num_layers"],
         dropout=config["dropout"],
         aggr=config.get("aggr", "mean"),
+        bidirectional=config.get("bidirectional", False),
     )
     model.load_state_dict(torch.load(run_dir / "model.pt", map_location="cpu"))
     model.eval()

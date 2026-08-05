@@ -155,6 +155,12 @@ class TrainConfig:
     use_smote: bool = False
     smote_ratio: float = 1.0
     use_log_scaling: bool = True
+    # "log" = signed-log1p + standardize (FeatureScaler); "quantile" = rank
+    # normalization (QuantileScaler), which survives the early->late covariate
+    # shift far better — see QuantileScaler's docstring.
+    scaler_kind: str = "log"
+    # Aggregate a node's payees as well as its payers — see model.py.
+    bidirectional: bool = False
     train_frac: float = 0.70
     val_frac: float = 0.15
     label_source: str = "ground_truth"
@@ -250,10 +256,16 @@ def train_model(
             raise ValueError(f"{name} split contains no positives — cannot proceed")
 
     # ---- scaling, fitted on TRAIN ONLY ----------------------------------
-    scaler = FeatureScaler(use_log=config.use_log_scaling)
+    if config.scaler_kind == "quantile":
+        from ml.split import QuantileScaler
+
+        scaler = QuantileScaler()
+    else:
+        scaler = FeatureScaler(use_log=config.use_log_scaling)
     x_scaled = scaler.fit_transform(feature_set.x, masks.train)
     logger.info(
-        "Scaled features: max|x| %.4g (was %.4g)",
+        "Scaler: %s | scaled max|x| %.4g (was %.4g)",
+        config.scaler_kind,
         float(np.abs(x_scaled).max()), float(np.abs(feature_set.x).max()),
     )
 
@@ -271,6 +283,7 @@ def train_model(
         num_layers=config.num_layers,
         dropout=config.dropout,
         aggr=config.aggr,
+        bidirectional=config.bidirectional,
     ).to(device)
     for line in model.describe():
         logger.info("  %s", line)
@@ -285,6 +298,7 @@ def train_model(
     )
 
     val_truth = positives[masks.val]
+    train_truth = positives[masks.train]
     best_val = -1.0
     best_epoch = -1
     best_state: Optional[Dict[str, Any]] = None
@@ -325,8 +339,23 @@ def train_model(
             val_truth, val_scores >= 0.5, val_scores
         ).average_precision
 
+        # Train PR-AUC is tracked alongside validation because the two together
+        # diagnose what is limiting the model, and neither does alone. Train far
+        # above val means overfitting; both low means underfitting — the model
+        # cannot fit even the data it is optimizing on, which points at
+        # optimization or features rather than regularization.
+        train_scores = scores[train_mask].cpu().numpy()
+        train_pr_auc = fraud_metrics(
+            train_truth, train_scores >= 0.5, train_scores
+        ).average_precision
+
         history.append(
-            {"epoch": epoch, "loss": float(loss.item()), "val_pr_auc": float(val_pr_auc)}
+            {
+                "epoch": epoch,
+                "loss": float(loss.item()),
+                "val_pr_auc": float(val_pr_auc),
+                "train_pr_auc": float(train_pr_auc),
+            }
         )
 
         if val_pr_auc > best_val:
@@ -339,8 +368,9 @@ def train_model(
 
         if epoch % 10 == 0 or epoch == 1:
             logger.info(
-                "epoch %3d | loss %.5f | val PR-AUC %.4f | best %.4f @%d",
-                epoch, loss.item(), val_pr_auc, best_val, best_epoch,
+                "epoch %4d | loss %.5f | train PR-AUC %.4f | val PR-AUC %.4f "
+                "| best %.4f @%d",
+                epoch, loss.item(), train_pr_auc, val_pr_auc, best_val, best_epoch,
             )
 
         if epochs_without_gain >= config.patience:
@@ -386,11 +416,14 @@ def train_model(
     # detail. A checkpoint without them is unusable: inference would feed raw
     # 1e14-scale amounts into weights fitted on standardized inputs and return
     # confident nonsense.
-    result_scaler = {
-        "mean": scaler.mean_.tolist(),
-        "std": scaler.std_.tolist(),
-        "use_log": scaler.use_log,
-    }
+    if config.scaler_kind == "quantile":
+        result_scaler = scaler.state()
+    else:
+        result_scaler = {
+            "mean": scaler.mean_.tolist(),
+            "std": scaler.std_.tolist(),
+            "use_log": scaler.use_log,
+        }
 
     result = TrainResult(
         config=asdict(config),
@@ -525,6 +558,15 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument("--smote", action="store_true")
     parser.add_argument("--smote-ratio", type=float, default=1.0)
     parser.add_argument("--no-log-scaling", action="store_true")
+    parser.add_argument(
+        "--scaler", default="log", choices=["log", "quantile"],
+        help="'quantile' = shift-robust rank normalization (recommended for the "
+             "temporal split); 'log' = signed-log1p + standardize",
+    )
+    parser.add_argument(
+        "--bidirectional", action="store_true",
+        help="aggregate payees as well as payers (recommended)",
+    )
     parser.add_argument("--train-frac", type=float, default=0.70)
     parser.add_argument("--val-frac", type=float, default=0.15)
     parser.add_argument(
@@ -597,6 +639,8 @@ def main() -> int:
         use_smote=args.smote,
         smote_ratio=args.smote_ratio,
         use_log_scaling=not args.no_log_scaling,
+        scaler_kind=args.scaler,
+        bidirectional=args.bidirectional,
         train_frac=args.train_frac,
         val_frac=args.val_frac,
         label_source=args.label_source,

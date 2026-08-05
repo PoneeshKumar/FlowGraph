@@ -24,6 +24,7 @@ from ml.model import (  # noqa: E402
 )
 from ml.split import (  # noqa: E402
     FeatureScaler,
+    QuantileScaler,
     SplitMasks,
     binary_labels_from_mask,
     temporal_split,
@@ -122,6 +123,38 @@ class TestModel:
         assert isinstance(pick_device("cpu"), torch.device)
         assert pick_device("cpu").type == "cpu"
         assert isinstance(pick_device("auto"), torch.device)
+
+    def test_bidirectional_doubles_encode_width(self):
+        """Concatenating in- and out-neighbour streams doubles the width."""
+        uni = GraphSAGERiskClassifier(in_channels=5, hidden=16, bidirectional=False)
+        bi = GraphSAGERiskClassifier(in_channels=5, hidden=16, bidirectional=True)
+        ei = torch.tensor([[0, 1], [1, 2]], dtype=torch.long)
+        x = torch.randn(4, 5)
+        assert uni.encode(x, ei).shape == (4, 16)
+        assert bi.encode(x, ei).shape == (4, 32)
+        assert bi(x, ei).shape == (4, 2)
+        assert bi.num_parameters() > uni.num_parameters()
+
+    def test_bidirectional_sees_out_neighbours(self):
+        """A pure sender (only out-edges) gets no message in unidirectional mode
+        but does in bidirectional mode — the whole reason it exists."""
+        # node 0 -> node 1 : node 0 has no in-neighbour, node 1 as its payee.
+        ei = torch.tensor([[0], [1]], dtype=torch.long)
+        uni = GraphSAGERiskClassifier(
+            in_channels=4, hidden=8, num_layers=1, dropout=0.0, bidirectional=False
+        ).eval()
+        bi = GraphSAGERiskClassifier(
+            in_channels=4, hidden=8, num_layers=1, dropout=0.0, bidirectional=True
+        ).eval()
+        x_a = torch.zeros(2, 4); x_a[1] = torch.tensor([1.0, 0.0, 0.0, 0.0])
+        x_b = torch.zeros(2, 4); x_b[1] = torch.tensor([0.0, 1.0, 0.0, 0.0])
+        with torch.no_grad():
+            u_a, u_b = uni.encode(x_a, ei)[0], uni.encode(x_b, ei)[0]
+            b_a, b_b = bi.encode(x_a, ei)[0], bi.encode(x_b, ei)[0]
+        # node 0's own features are unchanged, so unidirectional ignores node 1
+        assert torch.allclose(u_a, u_b, atol=1e-6)
+        # bidirectional aggregates node 1 (node 0's payee), so node 0 responds
+        assert not torch.allclose(b_a, b_b, atol=1e-6)
 
 
 # ---------------------------------------------------------------------------
@@ -284,6 +317,51 @@ class TestFeatureScaler:
         assert labels.tolist() == [1, 0, 1]
 
 
+class TestQuantileScaler:
+    def test_fits_on_train_rows_only(self):
+        """Fitting must not see val/test rows — same rule as FeatureScaler."""
+        rng = np.random.default_rng(0)
+        x = rng.normal(size=(200, 4)).astype(np.float32)
+        x[100:] += 50.0  # test rows on a wildly different scale
+        train_mask = np.zeros(200, dtype=bool); train_mask[:100] = True
+        out = QuantileScaler(n_quantiles=100).fit_transform(x, train_mask)
+        # train rows map to ~standard normal; the shifted test rows saturate the
+        # top of the train CDF rather than dragging the fit toward them.
+        assert abs(float(out[:100].mean())) < 0.2
+        assert float(out[100:].mean()) > float(out[:100].mean())
+
+    def test_is_monotonic_within_a_column(self):
+        rng = np.random.default_rng(1)
+        x = rng.normal(size=(150, 3)).astype(np.float32)
+        train_mask = np.ones(150, dtype=bool)
+        out = QuantileScaler(n_quantiles=100).fit_transform(x, train_mask)
+        for j in range(3):
+            order_in = np.argsort(x[:, j])
+            transformed = out[order_in, j]
+            assert np.all(np.diff(transformed) >= -1e-6)  # non-decreasing
+
+    def test_state_roundtrips_exactly(self):
+        """save -> JSON -> load reproduces the transform bit for bit, so a
+        checkpoint's scaler scores identically at inference time."""
+        import json
+
+        rng = np.random.default_rng(2)
+        x = rng.normal(size=(120, 5)).astype(np.float32)
+        train_mask = np.zeros(120, dtype=bool); train_mask[:80] = True
+        sc = QuantileScaler(n_quantiles=64).fit(x, train_mask)
+        state = json.loads(json.dumps(sc.state()))  # force JSON round-trip
+        restored = QuantileScaler.from_state(state)
+        assert np.abs(sc.transform(x) - restored.transform(x)).max() == 0.0
+
+    def test_transform_before_fit_raises(self):
+        with pytest.raises(RuntimeError, match="fitted"):
+            QuantileScaler().transform(np.ones((3, 2), dtype=np.float32))
+
+    def test_empty_train_split_raises(self):
+        with pytest.raises(ValueError, match="empty train split"):
+            QuantileScaler().fit(np.ones((5, 2), dtype=np.float32), np.zeros(5, dtype=bool))
+
+
 # ---------------------------------------------------------------------------
 # training
 # ---------------------------------------------------------------------------
@@ -350,6 +428,24 @@ class TestTrainingLoop:
         assert result.test_metrics["average_precision"] > 0.5
         assert 0.0 <= result.threshold <= 1.0
         assert len(result.history) >= 1
+
+    def test_bidirectional_quantile_path_trains(self):
+        """The recommended config — bidirectional message passing + quantile
+        normalization — must run end to end and persist a reloadable scaler."""
+        feature_set, ground_truth = _synthetic_feature_set()
+        config = TrainConfig(
+            epochs=40, hidden=16, patience=40, device="cpu",
+            bidirectional=True, scaler_kind="quantile",
+        )
+
+        model, result = train_model(feature_set, ground_truth, config)
+
+        assert model.bidirectional is True
+        assert result.best_val_pr_auc > 0.5
+        # the persisted scaler must be the quantile kind and rebuildable
+        assert result.scaler.get("kind") == "quantile"
+        rebuilt = QuantileScaler.from_state(result.scaler)
+        assert rebuilt.transform(feature_set.x).shape == feature_set.x.shape
 
     def test_scaler_is_fitted_before_tensors_are_built(self):
         """Training must not blow up on unscaled heavy-tailed inputs."""
