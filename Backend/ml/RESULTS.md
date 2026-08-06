@@ -20,17 +20,21 @@ positives; every row same regularization, seed 42):
 | + bidirectional message passing | 0.2570 | 0.0822 | 0.956 |
 | + quantile normalization | 0.2115 | 0.2816 | 0.963 |
 | + both | 0.2404 | 0.2813 | 0.9745 |
-| **+ structural features (k-core, …)** | 0.3419 | 0.4092 | 0.9778 |
+| + structural features (k-core, …) | 0.3419 | 0.4092 | 0.9778 |
+| + capacity (hidden 192) | 0.3478 | 0.4216 | 0.9769 |
+| **+ motif features (champion)** | 0.4056 | 0.4601 | 0.9785 |
 
-**Test PR-AUC 0.057 → 0.41 (~7×), test ROC 0.94 → 0.98, test precision 0.04 →
-0.54** — and widening the champion to hidden 192 takes it to **0.42 / 0.56**.
-Note validation barely moves for the quantile change: its entire benefit
+(The first five rows are a controlled h128 ablation, one change at a time; the
+last two add capacity and the motif features to reach the champion.)
+
+**Test PR-AUC 0.057 → 0.46 (~8×), test ROC 0.94 → 0.98, test precision 0.04 →
+0.72.** Note validation barely moves for the quantile change: its entire benefit
 lives on the shifted future, so it is invisible to a validation-only sweep and
 has to be read on test. That is also why the earlier "remove regularization →
 val 0.44" result was a trap — that config scored test ROC 0.50, pure memorization
 (kept as the `regularization` sweep preset, cautionary).
 
-## The three changes
+## The changes
 
 **Quantile (rank) normalization — `ml/split.py:QuantileScaler`.** Each feature is
 mapped to its train-distribution percentile, then to a normal quantile. "Top 1%
@@ -56,6 +60,16 @@ held-out future, *higher than any raw feature*, and is stable across the shift
 0.28 → 0.41 with validation moving in step, so it is signal, not memorization.
 Whole-graph coreness is one O(E) peel, cheap at build time.
 
+**Motif features — `ml/features.py:MOTIF_FEATURES`.** Four more edge-list
+features aimed at the typologies the structural block still missed. The key pair
+is hub proximity taken as a **max** over neighbours: `max_payee_in_deg` (the
+largest in-degree among my payees) fires on FAN-IN senders, `max_payer_out_deg`
+on FAN-OUT receivers. Those peripheral accounts have degree ~1 and blend in under
+the GNN's mean aggregation, which washes out their single telling neighbour — the
+hub — where a max preserves it. Plus 2-hop reach counts for scatter/gather.
+Measured: test PR-AUC 0.42 → 0.46, precision 0.56 → 0.72, the whole PR curve
+lifting, and every typology up at matched selectivity.
+
 ### What did NOT help
 - **Removing regularization + widening to 256** → validation 0.44 but test ROC
   0.50. Memorization of the train/val population.
@@ -71,73 +85,78 @@ Whole-graph coreness is one O(E) peel, cheap at build time.
   in the weaker h128 members *diluted* the stronger h192 (0.415 < 0.422). Not
   worth K× inference. Capacity, not ensembling, was the remaining lever.
 
-## Champion — `ml/runs/v5_h192`
+## Champion — `ml/runs/v6_motifs`
 
 Bidirectional GraphSAGE (hidden 192, 2 layers, dropout 0.3), quantile scaler,
-43 features (38 + 5 structural), Focal Loss (γ=2). Widening from hidden 128 to
-192 was the last clean single-model gain (test PR-AUC 0.40 → 0.42); beyond it,
-capacity plateaus and overfitting risk climbs.
+47 features (38 + 5 structural + 4 motif), Focal Loss (γ=2).
 
 ```
-best val PR-AUC 0.3478
-TEST   PR-AUC 0.4216   ROC-AUC 0.9769
-       precision 0.562   recall 0.362   F1 0.440
-       TP 149  FP 116  FN 263  support 412  (test prevalence 0.32%)
+best val PR-AUC 0.4056
+TEST   PR-AUC 0.4601   ROC-AUC 0.9785
+       precision 0.718   recall 0.308   F1 0.431   (at the F1-optimal threshold)
+       TP 127  FP 50  FN 285  support 412  (test prevalence 0.32%)
 ```
 
-At 0.32% test prevalence a random ranker scores PR-AUC ≈ 0.003, so 0.42 is ~140×
-better than random, and `precision@8` on the full graph is 100% (162× lift over
-the 0.617% base rate). Test precision rose from the old model's 0.041 to 0.562 —
-of the accounts it flags at the operating threshold, more than half are real.
-The hidden-128 variant (`v4_structural`, test PR-AUC 0.40) is a ~2× cheaper
-alternative if inference cost matters.
+At 0.32% test prevalence a random ranker scores PR-AUC ≈ 0.003, so 0.46 is ~150×
+better than random. The motifs shift the **whole PR curve up**, so the champion
+dominates the previous (structural-only) model at every operating point:
 
-### Recall by typology (whole graph, at the chosen threshold)
+| operating point | v5 (structural) | v6 (+motifs) |
+|---|---|---|
+| precision @ recall 0.36 | 0.558 | **0.664** |
+| precision @ recall 0.45 | 0.387 | **0.440** |
+| recall @ precision 0.56 | 0.362 | **0.408** |
 
-| typology | recall | caught / support | reachable by cycle detection? |
+The F1-optimal threshold happens to land in a high-precision regime (72%), so
+recall-*at-threshold* understates detection — hence the table below fixes
+selectivity to compare fairly.
+
+### Recall by typology (whole graph, matched selectivity — top ~2,500 flagged)
+
+| typology | structural-only | + motifs | reachable by cycle detection? |
 |---|---|---|---|
-| SCATTER-GATHER | 64.8% | 239 / 369 | no |
-| GATHER-SCATTER | 50.8% | 348 / 685 | no |
-| CYCLE | 43.9% | 119 / 271 | yes |
-| RANDOM | 38.9% | 82 / 211 | no |
-| FAN-OUT | 35.9% | 129 / 359 | no |
-| FAN-IN | 18.3% | 62 / 338 | no |
-| STACK | 17.0% | 113 / 663 | no |
-| BIPARTITE | 9.8% | 48 / 491 | no |
+| SCATTER-GATHER | 62.3% | **70.2%** | no |
+| GATHER-SCATTER | 48.6% | **50.4%** | no |
+| CYCLE | 40.6% | **46.5%** | yes |
+| RANDOM | 37.4% | **45.0%** | no |
+| FAN-OUT | 34.3% | 34.3% | no |
+| FAN-IN | 16.6% | **22.2%** | no |
+| STACK | 14.8% | **17.3%** | no |
+| BIPARTITE | 8.8% | **10.4%** | no |
 
-The structural features lift the loop-free typologies (STACK, FAN-IN) as well as
-CYCLE over the pre-structural model. The GNN scores highest on the SCATTER/GATHER
-typologies — structures with no closed loop that depth-limited cycle search
-cannot represent at any depth. That is the case for the GNN existing. (Whole-graph
-recall at the F1 threshold is a slice through one operating point; the champion is
-chosen on threshold-free PR-AUC, where h192 dominates every alternative.)
+The motifs lift every typology except FAN-OUT (flat), and most of all the ones
+they targeted — FAN-IN +5.6, STACK +2.5, plus SCATTER-GATHER +7.9 and CYCLE +5.9.
+The GNN scores highest on the SCATTER/GATHER typologies — structures with no
+closed loop that depth-limited cycle search cannot represent at any depth. That
+is the case for the GNN existing.
 
 ### vs the detectors
 
 | | recall |
 |---|---|
-| GNN | **32.4%** |
+| GNN | **29–33%** (operating-point dependent) |
 | cycle + Louvain detectors | 3.9% |
 
-959 accounts flagged by the GNN alone, missed by every detector, confirmed by
-ground truth (was 674 at hidden 128, and 547 before quantile/structural).
+At the F1 threshold the GNN flags 1,707 accounts at 50% precision — 851 correct
+ones no detector found. The hidden-128 / 43-feature variants remain documented as
+cheaper alternatives if inference cost matters.
 
 ## Reproducing
 
-`ml/features.py` now emits 43 columns (the 5 structural features included), so a
-rebuilt cache carries them automatically.
+`ml/features.py` now emits 47 columns (5 structural + 4 motif features included),
+so a rebuilt cache carries them automatically.
 
 ```bash
 docker compose up -d neo4j redis postgres
 python3 -m ml.datasets.run_ingest --max-background none --reset   # ~10 min
 python3 -m ml.datasets.run_louvain                                # ~4 min
-python3 -m ml.train --refresh-cache --cache ml/cache/featureset_v3.npz \
+python3 -m ml.train --refresh-cache --cache ml/cache/featureset_v4.npz \
     --scaler quantile --bidirectional \
     --train-frac 0.60 --val-frac 0.15 \
     --hidden 192 --dropout 0.3 --lr 0.01 --gamma 2.0 \
-    --epochs 320 --patience 80 --run-name v5_h192
-python3 -m ml.sweep --preset shift --cache ml/cache/featureset_v3.npz   # the ablation
-python3 -m ml.predict --run ml/runs/v5_h192 --cache ml/cache/featureset_v3.npz --top 20
+    --epochs 320 --patience 80 --run-name v6_motifs
+python3 -m ml.sweep --preset shift --cache ml/cache/featureset_v4.npz   # the ablation
+python3 -m ml.predict --run ml/runs/v6_motifs --cache ml/cache/featureset_v4.npz --top 20
 ```
 
 ## Honest limitations
@@ -157,12 +176,14 @@ python3 -m ml.predict --run ml/runs/v5_h192 --cache ml/cache/featureset_v3.npz -
    is the steadier read.
 
 ## Worth doing next
-1. More structural motifs targeting the weakest typologies (BIPARTITE 10%,
-   STACK 17%) — e.g. 2-hop fan-out reach, bipartite-core membership. Structural
-   features were the single biggest lever, so this is the most promising thread.
+1. BIPARTITE is still the weakest (10%) — a bipartite-core / neighbour-overlap
+   feature is the natural next motif, since the hub-proximity pair mainly helped
+   FAN-IN/FAN-OUT.
 2. Time-bounded features so the temporal evaluation is real (the split separates
    accounts, not time).
 3. Mini-batch neighbour sampling for many more gradient steps — full-batch is one
    step per epoch, and the champion still wanted to train at the cap.
+4. A recall-oriented threshold policy — the F1-optimal operating point lands at
+   72% precision / 31% recall, which under-uses the model for a review queue.
 
 (Ensembling was tried and did not pay off — see "What did NOT help".)

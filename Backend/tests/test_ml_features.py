@@ -16,6 +16,7 @@ from db.redis import RedisClient, _window_label
 from ml.features import (
     COMMUNITY_FEATURES,
     GRAPH_FEATURES,
+    MOTIF_FEATURES,
     NODE_TYPE_FEATURES,
     NUM_CLASSES,
     STRUCTURAL_FEATURES,
@@ -68,6 +69,44 @@ class TestStructuralFeatures:
         for name in STRUCTURAL_FEATURES:
             assert feats[name].shape == (5,)
             assert np.all(feats[name] == 0.0)
+
+
+class TestMotifFeatures:
+    """Hub-proximity and 2-hop reach — the motifs targeting FAN-IN/OUT/BIPARTITE."""
+
+    def test_max_payee_in_deg_flags_fan_in_senders(self):
+        # 1,2,3 -> 0 : node 0 is a fan-in hub with in-degree 3.
+        src = np.array([1, 2, 3], dtype=np.int64)
+        dst = np.array([0, 0, 0], dtype=np.int64)
+        f = FeatureBuilder._motif_features(src, dst, 4)
+        # each sender pays INTO node 0, whose in-degree is 3
+        assert np.allclose(f["max_payee_in_deg"][[1, 2, 3]], np.log1p(3))
+        assert f["max_payee_in_deg"][0] == 0.0  # the hub pays no one
+
+    def test_max_payer_out_deg_flags_fan_out_receivers(self):
+        # 0 -> 1,2,3 : node 0 is a fan-out hub with out-degree 3.
+        src = np.array([0, 0, 0], dtype=np.int64)
+        dst = np.array([1, 2, 3], dtype=np.int64)
+        f = FeatureBuilder._motif_features(src, dst, 4)
+        # each receiver is paid BY node 0, whose out-degree is 3
+        assert np.allclose(f["max_payer_out_deg"][[1, 2, 3]], np.log1p(3))
+        assert f["max_payer_out_deg"][0] == 0.0  # the hub receives from no one
+
+    def test_two_hop_out_counts_distinct_reachable_nodes(self):
+        # 0->1, 1->2, 1->3 : from 0, two out-hops reach {2, 3}.
+        src = np.array([0, 1, 1], dtype=np.int64)
+        dst = np.array([1, 2, 3], dtype=np.int64)
+        f = FeatureBuilder._motif_features(src, dst, 4)
+        assert f["two_hop_out"][0] == np.log1p(2)
+        assert f["two_hop_out"][1] == 0.0  # 2 and 3 are sinks
+
+    def test_empty_graph_returns_zeros_of_right_width(self):
+        f = FeatureBuilder._motif_features(
+            np.array([], dtype=np.int64), np.array([], dtype=np.int64), 6
+        )
+        assert set(f) == set(MOTIF_FEATURES)
+        for name in MOTIF_FEATURES:
+            assert f[name].shape == (6,) and np.all(f[name] == 0.0)
 
 
 def _node(
