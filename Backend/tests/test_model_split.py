@@ -22,6 +22,11 @@ from ml.model import (  # noqa: E402
     pick_device,
     predict_scores,
 )
+from ml.sampler import (  # noqa: E402
+    balanced_seed_batch,
+    build_adjacency,
+    sample_subgraph,
+)
 from ml.split import (  # noqa: E402
     FeatureScaler,
     QuantileScaler,
@@ -362,6 +367,36 @@ class TestQuantileScaler:
             QuantileScaler().fit(np.ones((5, 2), dtype=np.float32), np.zeros(5, dtype=bool))
 
 
+class TestNeighbourSampler:
+    def test_build_adjacency_directions(self):
+        # 0->1, 0->2, 1->2
+        ei = np.array([[0, 0, 1], [1, 2, 2]], dtype=np.int64)
+        (out_ptr, out_nb), (in_ptr, in_nb) = build_adjacency(ei, 3)
+        assert sorted(out_nb[out_ptr[0]:out_ptr[1]].tolist()) == [1, 2]  # 0 pays 1,2
+        assert out_ptr[3] - out_ptr[2] == 0                              # 2 pays no one
+        assert sorted(in_nb[in_ptr[2]:in_ptr[3]].tolist()) == [0, 1]     # 2 paid by 0,1
+
+    def test_sample_subgraph_covers_two_hop_receptive_field(self):
+        # 0->1->2 : node 2's 2-hop in-neighbourhood is {0, 1, 2}
+        ei = np.array([[0, 1], [1, 2]], dtype=np.int64)
+        adj_out, adj_in = build_adjacency(ei, 3)
+        rng = np.random.default_rng(0)
+        nodes, edge_index, seed_local = sample_subgraph(
+            np.array([2]), adj_out, adj_in, 3, k=5, hops=2, rng=rng
+        )
+        assert set(nodes.tolist()) == {0, 1, 2}
+        assert nodes[seed_local[0]] == 2               # seed maps back to itself
+        assert edge_index.max() < len(nodes)           # edges are local-indexed
+
+    def test_balanced_batch_hits_the_positive_fraction(self):
+        pos = np.array([0, 1, 2]); neg = np.arange(10, 100)
+        rng = np.random.default_rng(1)
+        batch = balanced_seed_batch(pos, neg, batch_size=20, pos_frac=0.4, rng=rng)
+        n_pos = sum(1 for s in batch if s in set(pos.tolist()))
+        assert batch.shape == (20,)
+        assert n_pos == 8  # round(20 * 0.4)
+
+
 # ---------------------------------------------------------------------------
 # training
 # ---------------------------------------------------------------------------
@@ -446,6 +481,23 @@ class TestTrainingLoop:
         assert result.scaler.get("kind") == "quantile"
         rebuilt = QuantileScaler.from_state(result.scaler)
         assert rebuilt.transform(feature_set.x).shape == feature_set.x.shape
+
+    def test_minibatch_path_trains_and_learns(self):
+        """Neighbour-sampled, class-balanced mini-batch training runs end to end
+        and learns the separable synthetic task."""
+        feature_set, ground_truth = _synthetic_feature_set()
+        config = TrainConfig(
+            epochs=8, hidden=16, patience=8, device="cpu",
+            bidirectional=True, scaler_kind="quantile",
+            minibatch=True, mb_batch=32, mb_k=5, mb_pos_frac=0.3, mb_steps=15,
+            lr=0.01,
+        )
+
+        model, result = train_model(feature_set, ground_truth, config)
+
+        assert result.best_val_pr_auc > 0.5
+        assert result.config["minibatch"] is True
+        assert len(result.history) >= 1
 
     def test_scaler_is_fitted_before_tensors_are_built(self):
         """Training must not blow up on unscaled heavy-tailed inputs."""

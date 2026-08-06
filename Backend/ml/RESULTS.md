@@ -22,13 +22,15 @@ positives; every row same regularization, seed 42):
 | + both | 0.2404 | 0.2813 | 0.9745 |
 | + structural features (k-core, …) | 0.3419 | 0.4092 | 0.9778 |
 | + capacity (hidden 192) | 0.3478 | 0.4216 | 0.9769 |
-| **+ motif features (champion)** | 0.4056 | 0.4601 | 0.9785 |
+| + motif features | 0.4056 | 0.4601 | 0.9785 |
+| **+ mini-batch training (champion)** | 0.6376 | 0.6499 | 0.9889 |
 
 (The first five rows are a controlled h128 ablation, one change at a time; the
-last two add capacity and the motif features to reach the champion.)
+last three add capacity, motif features, and mini-batch training to reach the
+champion.)
 
-**Test PR-AUC 0.057 → 0.46 (~8×), test ROC 0.94 → 0.98, test precision 0.04 →
-0.72.** Note validation barely moves for the quantile change: its entire benefit
+**Test PR-AUC 0.057 → 0.65 (~11×), test ROC 0.94 → 0.99, test recall 0.60 at 66%
+precision.** Note validation barely moves for the quantile change: its entire benefit
 lives on the shifted future, so it is invisible to a validation-only sweep and
 has to be read on test. That is also why the earlier "remove regularization →
 val 0.44" result was a trap — that config scored test ROC 0.50, pure memorization
@@ -70,6 +72,17 @@ hub — where a max preserves it. Plus 2-hop reach counts for scatter/gather.
 Measured: test PR-AUC 0.42 → 0.46, precision 0.56 → 0.72, the whole PR curve
 lifting, and every typology up at matched selectivity.
 
+**Mini-batch neighbour sampling — `ml/sampler.py`, `--minibatch`.** The single
+biggest lever, and it adds no features. Full-batch training computes one
+embedding for the whole graph and takes ONE optimizer step per epoch — every
+champion peaked at its epoch cap because it was starved of gradient steps. This
+samples a bounded k-hop subgraph around a few hundred seed nodes each step, so an
+epoch is hundreds of updates. It also does what full-batch cannot: **class-
+balanced batches** — at 0.7% prevalence a random batch holds ~3 fraud seeds, so
+`pos_frac` oversamples the minority until every step sees fraud. Measured: test
+PR-AUC 0.46 → 0.65, recall 0.31 → 0.59, in a handful of epochs. The sampler is
+vectorized numpy over CSR adjacency — no `pyg-lib` / `torch-sparse` install.
+
 ### What did NOT help
 - **Removing regularization + widening to 256** → validation 0.44 but test ROC
   0.50. Memorization of the train/val population.
@@ -84,62 +97,60 @@ lifting, and every typology up at matched selectivity.
   seeds. A capacity-*diverse* ensemble (h128 + h192) was worse still: averaging
   in the weaker h128 members *diluted* the stronger h192 (0.415 < 0.422). Not
   worth K× inference. Capacity, not ensembling, was the remaining lever.
+- **Bipartite-density features for BIPARTITE** (4-cycle count, max shared
+  neighbours). BIPARTITE is the one typology nothing catches (~9%), but its
+  blocks turn out to be *sparse* (degree 1-5, few 4-cycles) and embedded in the
+  giant component, not dense isolated blocks — so 4-cycle counts fired on
+  SCATTER-GATHER instead and left BIPARTITE flat (label correlation 0.04). A
+  well-investigated dead end; BIPARTITE needs non-topological signal.
 
-## Champion — `ml/runs/v6_motifs`
+## Champion — `ml/runs/v8_minibatch`
 
 Bidirectional GraphSAGE (hidden 192, 2 layers, dropout 0.3), quantile scaler,
-47 features (38 + 5 structural + 4 motif), Focal Loss (γ=2).
+47 features (38 + 5 structural + 4 motif), Focal Loss (γ=2), trained with
+neighbour-sampled **class-balanced mini-batches** (`ml/sampler.py`).
 
 ```
-best val PR-AUC 0.4056
-TEST   PR-AUC 0.4601   ROC-AUC 0.9785
-       precision 0.718   recall 0.308   F1 0.431   (at the F1-optimal threshold)
-       TP 127  FP 50  FN 285  support 412  (test prevalence 0.32%)
+best val PR-AUC 0.6376
+TEST   PR-AUC 0.6499   ROC-AUC 0.9889
+       precision 0.661   recall 0.587   F1 0.622
+       TP 242  FP 124  FN 170  support 412  (test prevalence 0.32%)
 ```
 
-At 0.32% test prevalence a random ranker scores PR-AUC ≈ 0.003, so 0.46 is ~150×
-better than random. The motifs shift the **whole PR curve up**, so the champion
-dominates the previous (structural-only) model at every operating point:
+At 0.32% test prevalence a random ranker scores PR-AUC ≈ 0.003, so 0.65 is ~210×
+better than random. Mini-batch training lifted precision *and* recall together —
+the full-batch model sat at 0.72 / 0.31, this one at 0.66 / **0.59**, nearly
+doubling recall. Whole-graph GNN recall reached 48%, flagging 1,911 accounts at
+76% precision.
 
-| operating point | v5 (structural) | v6 (+motifs) |
-|---|---|---|
-| precision @ recall 0.36 | 0.558 | **0.664** |
-| precision @ recall 0.45 | 0.387 | **0.440** |
-| recall @ precision 0.56 | 0.362 | **0.408** |
+### Recall by typology (whole graph, at the F1 threshold)
 
-The F1-optimal threshold happens to land in a high-precision regime (72%), so
-recall-*at-threshold* understates detection — hence the table below fixes
-selectivity to compare fairly.
-
-### Recall by typology (whole graph, matched selectivity — top ~2,500 flagged)
-
-| typology | structural-only | + motifs | reachable by cycle detection? |
+| typology | full-batch (v6) | mini-batch (v8) | reachable by cycle detection? |
 |---|---|---|---|
-| SCATTER-GATHER | 62.3% | **70.2%** | no |
-| GATHER-SCATTER | 48.6% | **50.4%** | no |
-| CYCLE | 40.6% | **46.5%** | yes |
-| RANDOM | 37.4% | **45.0%** | no |
-| FAN-OUT | 34.3% | 34.3% | no |
-| FAN-IN | 16.6% | **22.2%** | no |
-| STACK | 14.8% | **17.3%** | no |
-| BIPARTITE | 8.8% | **10.4%** | no |
+| SCATTER-GATHER | ~70% | **85.9%** | no |
+| GATHER-SCATTER | ~50% | **85.3%** | no |
+| FAN-OUT | ~34% | **54.9%** | no |
+| CYCLE | ~47% | **47.6%** | yes |
+| RANDOM | ~45% | **46.0%** | no |
+| FAN-IN | ~22% | **45.6%** | no |
+| STACK | ~17% | **21.0%** | no |
+| BIPARTITE | ~10% | 8.6% | no |
 
-The motifs lift every typology except FAN-OUT (flat), and most of all the ones
-they targeted — FAN-IN +5.6, STACK +2.5, plus SCATTER-GATHER +7.9 and CYCLE +5.9.
-The GNN scores highest on the SCATTER/GATHER typologies — structures with no
-closed loop that depth-limited cycle search cannot represent at any depth. That
-is the case for the GNN existing.
+The balanced batches roughly doubled recall on the loop-free typologies (FAN-IN
+22→46, FAN-OUT 34→55, GATHER-SCATTER 50→85). **BIPARTITE alone did not move** —
+a genuine limitation confirmed by investigation: its blocks are sparse (degree
+1-5), embedded in the giant component (98% of BIPARTITE accounts), and 4-cycle /
+hub-proximity / connected-component features all showed no signal there.
 
 ### vs the detectors
 
 | | recall |
 |---|---|
-| GNN | **29–33%** (operating-point dependent) |
+| GNN | **48.3%** |
 | cycle + Louvain detectors | 3.9% |
 
-At the F1 threshold the GNN flags 1,707 accounts at 50% precision — 851 correct
-ones no detector found. The hidden-128 / 43-feature variants remain documented as
-cheaper alternatives if inference cost matters.
+1,459 accounts flagged by the GNN alone, missed by every detector, confirmed by
+ground truth (was 979 at full-batch, 547 before quantile/structural).
 
 ## Reproducing
 
@@ -151,12 +162,13 @@ docker compose up -d neo4j redis postgres
 python3 -m ml.datasets.run_ingest --max-background none --reset   # ~10 min
 python3 -m ml.datasets.run_louvain                                # ~4 min
 python3 -m ml.train --refresh-cache --cache ml/cache/featureset_v4.npz \
-    --scaler quantile --bidirectional \
+    --scaler quantile --bidirectional --minibatch \
     --train-frac 0.60 --val-frac 0.15 \
-    --hidden 192 --dropout 0.3 --lr 0.01 --gamma 2.0 \
-    --epochs 320 --patience 80 --run-name v6_motifs
+    --hidden 192 --dropout 0.3 --lr 0.005 --gamma 2.0 \
+    --mb-batch 512 --mb-k 10 --mb-pos-frac 0.25 --mb-steps 300 \
+    --epochs 20 --patience 12 --run-name v8_minibatch
 python3 -m ml.sweep --preset shift --cache ml/cache/featureset_v4.npz   # the ablation
-python3 -m ml.predict --run ml/runs/v6_motifs --cache ml/cache/featureset_v4.npz --top 20
+python3 -m ml.predict --run ml/runs/v8_minibatch --cache ml/cache/featureset_v4.npz --top 20
 ```
 
 ## Honest limitations
@@ -168,22 +180,19 @@ python3 -m ml.predict --run ml/runs/v6_motifs --cache ml/cache/featureset_v4.npz
 2. **The split separates accounts, not time.** FLOWS_TO aggregates carry each
    account's full lifetime, so the evaluation overstates how *early* a mule is
    caught. Time-bounded features from `TRANSFER.ts` would fix it.
-3. **Full-batch training = one gradient step per epoch.** Mini-batch neighbour
-   sampling would give far more steps; deliberately avoided the `pyg-lib` install.
-4. **17.9% of accounts have no non-self neighbour** — message passing (even
+3. **17.9% of accounts have no non-self neighbour** — message passing (even
    bidirectional) adds nothing for them.
 5. **412 test positives**, so single-run test PR-AUC still carries noise; ROC-AUC
    is the steadier read.
 
 ## Worth doing next
-1. BIPARTITE is still the weakest (10%) — a bipartite-core / neighbour-overlap
-   feature is the natural next motif, since the hub-proximity pair mainly helped
-   FAN-IN/FAN-OUT.
+1. Tune the mini-batch regime — capacity (h256+), depth (3 hops), `pos_frac`,
+   `mb_k`, and steps/epoch were barely explored before this jump.
 2. Time-bounded features so the temporal evaluation is real (the split separates
    accounts, not time).
-3. Mini-batch neighbour sampling for many more gradient steps — full-batch is one
-   step per epoch, and the champion still wanted to train at the cap.
-4. A recall-oriented threshold policy — the F1-optimal operating point lands at
-   72% precision / 31% recall, which under-uses the model for a review queue.
+3. BIPARTITE (8.6%) looks like a genuine ceiling for topology-only features on
+   this data — the remaining lever would be transaction-level (amount/timing)
+   signal, not more graph structure.
 
-(Ensembling was tried and did not pay off — see "What did NOT help".)
+(Ensembling and bipartite-density / 4-cycle features were tried and did not pay
+off — see "What did NOT help".)
