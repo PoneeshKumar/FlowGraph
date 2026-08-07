@@ -31,7 +31,8 @@ last four add capacity, motifs, mini-batch training, and more capacity to reach
 the champion.)
 
 **Test PR-AUC 0.057 → 0.66 (~12×), test ROC 0.94 → 0.98, whole-graph GNN recall
-3.9% (detectors) → 54%.** Note validation barely moves for the quantile change: its entire benefit
+3.9% (detectors) → 54% — and a 3-seed ensemble reaches 0.70 / 57%.** Note
+validation barely moves for the quantile change: its entire benefit
 lives on the shifted future, so it is invisible to a validation-only sweep and
 has to be read on test. That is also why the earlier "remove regularization →
 val 0.44" result was a trap — that config scored test ROC 0.50, pure memorization
@@ -92,12 +93,11 @@ vectorized numpy over CSR adjacency — no `pyg-lib` / `torch-sparse` install.
   volume is already carried in node features.
 - **Dropping the sign-flipping features** was neutral — quantile normalization
   keeps their (validation-useful) signal while making them shift-robust.
-- **Ensembling** barely moved the needle. A 3-seed average gained +0.007 test
-  PR-AUC (0.400 → 0.407) — the members are too correlated, because quantile
-  normalization and the structural features left the model low-variance across
-  seeds. A capacity-*diverse* ensemble (h128 + h192) was worse still: averaging
-  in the weaker h128 members *diluted* the stronger h192 (0.415 < 0.422). Not
-  worth K× inference. Capacity, not ensembling, was the remaining lever.
+- **Ensembling the *full-batch* model** barely moved the needle (+0.007) — its
+  members were near-identical, because full-batch training is deterministic given
+  the seed and the whole graph. (Under mini-batch training this reverses and
+  ensembling pays off — see the Ensemble section — because sampling makes the
+  members diverse.)
 - **Bipartite-density features for BIPARTITE** (4-cycle count, max shared
   neighbours). BIPARTITE is the one typology nothing catches (~9%), but its
   blocks turn out to be *sparse* (degree 1-5, few 4-cycles) and embedded in the
@@ -154,6 +154,22 @@ and 4-cycle / hub-proximity / component features all showed no signal there.
 ground truth (was 1,459 at h192, 547 before quantile/structural). The hidden-192
 variant (`v8_minibatch`, test PR-AUC 0.65) is a ~1.8× cheaper alternative.
 
+### Ensemble — max performance (`ml/ensemble.py`)
+
+A 3-seed average of h256 mini-batch members reaches **test PR-AUC 0.695**, ROC
+0.987, GNN recall 57% — a clean +0.03 over the single model. Crucially this is
+where ensembling *finally pays off*: the full-batch seed-ensemble was a wash
+(+0.007) because its members were near-identical, but mini-batch draws a fresh
+random neighbourhood every step, so different seeds land on genuinely different
+functions and averaging cancels the residual variance. The cost is 3× inference,
+so it suits an offline/batch scoring pass rather than the streaming path; the
+single `v9_h256` is the deployable default.
+
+```bash
+python3 -m ml.ensemble --runs ml/runs/v9_h256 ml/runs/v9_h256_s1 ml/runs/v9_h256_s7 \
+    --cache ml/cache/featureset_v4.npz --top 20
+```
+
 ## Reproducing
 
 `ml/features.py` now emits 47 columns (5 structural + 4 motif features included),
@@ -196,5 +212,6 @@ python3 -m ml.predict --run ml/runs/v9_h256 --cache ml/cache/featureset_v4.npz -
    this data — the remaining lever would be transaction-level (amount/timing)
    signal, not more graph structure.
 
-(Ensembling and bipartite-density / 4-cycle features were tried and did not pay
-off — see "What did NOT help".)
+(A mini-batch ensemble reaches 0.70 — see the Ensemble section. Bipartite-density
+/ 4-cycle features and *full-batch* ensembling did not pay off — see "What did
+NOT help".)

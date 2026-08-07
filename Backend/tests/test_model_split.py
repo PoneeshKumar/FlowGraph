@@ -397,6 +397,25 @@ class TestNeighbourSampler:
         assert n_pos == 8  # round(20 * 0.4)
 
 
+class TestEnsemble:
+    def test_averages_member_probabilities(self, monkeypatch):
+        import ml.ensemble as ens
+
+        members = {
+            "a": np.array([0.1, 0.9, 0.5]),
+            "b": np.array([0.3, 0.7, 0.5]),
+        }
+        monkeypatch.setattr(ens, "_member_scores", lambda run, fs: members[run.name])
+        out = ens.ensemble_scores([Path("runs/a"), Path("runs/b")], feature_set=None)
+        assert np.allclose(out, [0.2, 0.8, 0.5])  # probability mean, not logit
+
+    def test_empty_ensemble_raises(self):
+        import ml.ensemble as ens
+
+        with pytest.raises(ValueError, match="at least one"):
+            ens.ensemble_scores([], feature_set=None)
+
+
 # ---------------------------------------------------------------------------
 # training
 # ---------------------------------------------------------------------------
