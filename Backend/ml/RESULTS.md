@@ -24,14 +24,15 @@ positives; every row same regularization, seed 42):
 | + capacity (hidden 192) | 0.3478 | 0.4216 | 0.9769 |
 | + motif features | 0.4056 | 0.4601 | 0.9785 |
 | + mini-batch training (h192) | 0.6376 | 0.6499 | 0.9889 |
-| **+ capacity h256 (champion)** | 0.6407 | 0.6640 | 0.9839 |
+| + capacity h256 | 0.6407 | 0.6640 | 0.9839 |
+| **+ 3 layers (champion)** | 0.6830 | 0.7243 | 0.9863 |
 
 (The first five rows are a controlled h128 ablation, one change at a time; the
-last four add capacity, motifs, mini-batch training, and more capacity to reach
-the champion.)
+last five add capacity, motifs, mini-batch training, more capacity, and a third
+hop to reach the champion.)
 
-**Test PR-AUC 0.057 → 0.66 (~12×), test ROC 0.94 → 0.98, whole-graph GNN recall
-3.9% (detectors) → 54% — and a 3-seed ensemble reaches 0.70 / 57%.** Note
+**Test PR-AUC 0.057 → 0.72 (~13×), test ROC 0.94 → 0.99, whole-graph GNN recall
+3.9% (detectors) → 55% at 78% precision.** Note
 validation barely moves for the quantile change: its entire benefit
 lives on the shifted future, so it is invisible to a validation-only sweep and
 has to be read on test. That is also why the earlier "remove regularization →
@@ -104,61 +105,71 @@ vectorized numpy over CSR adjacency — no `pyg-lib` / `torch-sparse` install.
   giant component, not dense isolated blocks — so 4-cycle counts fired on
   SCATTER-GATHER instead and left BIPARTITE flat (label correlation 0.04). A
   well-investigated dead end; BIPARTITE needs non-topological signal.
+- **Transaction-level amount features** (pass-through amount-matching, amount
+  repetition) from the raw 5M-row transaction file. The hypothesis was that
+  layering forwards the *same* amount through a chain — but in this synthetic
+  dataset fraud accounts have *lower* pass-through than normal ones (0.36 vs
+  0.47), because routine "Reinvestment" self-transfers dominate the signal and
+  the injected patterns don't preserve amounts. Correlation ~0.03. The topology
+  is the signal here; amounts are noise.
 
-## Champion — `ml/runs/v9_h256`
+## Champion — `ml/runs/v10_L3`
 
-Bidirectional GraphSAGE (hidden 256, 2 layers, dropout 0.3), quantile scaler,
+Bidirectional GraphSAGE (hidden 256, **3 layers**, dropout 0.3), quantile scaler,
 47 features (38 + 5 structural + 4 motif), Focal Loss (γ=2), trained with
-neighbour-sampled **class-balanced mini-batches** (`ml/sampler.py`). Widening to
-256 under mini-batch training — full-batch overfit at that size — added a clean
-+0.014 test PR-AUC and +6pt whole-graph recall.
+neighbour-sampled **class-balanced mini-batches** (`ml/sampler.py`). The third
+hop is the win: full-batch training oversmooths past two layers, but mini-batch
+trains cleanly through it, taking test PR-AUC 0.66 → 0.72 — a single L3 model
+beats the 3-seed L2 ensemble.
 
 ```
-best val PR-AUC 0.6407
-TEST   PR-AUC 0.6640   ROC-AUC 0.9839
-       precision 0.623   recall 0.641   F1 0.632
+best val PR-AUC 0.6830
+TEST   PR-AUC 0.7243   ROC-AUC 0.9863
+       precision 0.768   recall 0.636   F1 0.696
        (test prevalence 0.32%)
 ```
 
-At 0.32% test prevalence a random ranker scores PR-AUC ≈ 0.003, so 0.66 is ~210×
-better than random. Whole-graph **GNN recall reached 54%**, flagging 2,312
-accounts at 71% precision — **1,637 confirmed accounts no detector found**.
+At 0.32% test prevalence a random ranker scores PR-AUC ≈ 0.003, so 0.72 is ~225×
+better than random. Whole-graph **GNN recall 55%**, flagging 2,131 accounts at
+**78% precision** — **1,657 confirmed accounts no detector found**.
 
 ### Recall by typology (whole graph, at the F1 threshold)
 
-| typology | full-batch (v6) | mini-batch h192 (v8) | mini-batch h256 (champion) | reachable by cycle? |
+| typology | full-batch (v6) | mini-batch h256 L2 (v9) | mini-batch h256 **L3** (champion) | reachable by cycle? |
 |---|---|---|---|---|
-| SCATTER-GATHER | ~70% | 85.9% | **89.7%** | no |
-| GATHER-SCATTER | ~50% | 85.3% | **89.3%** | no |
-| FAN-OUT | ~34% | 54.9% | **71.3%** | no |
-| RANDOM | ~45% | 46.0% | **54.5%** | no |
-| FAN-IN | ~22% | 45.6% | **54.1%** | no |
-| CYCLE | ~47% | 47.6% | **49.8%** | yes |
-| STACK | ~17% | 21.0% | **24.4%** | no |
-| BIPARTITE | ~10% | 8.6% | **12.2%** | no |
+| SCATTER-GATHER | ~70% | 89.7% | **91.6%** | no |
+| GATHER-SCATTER | ~50% | 89.3% | **91.1%** | no |
+| FAN-OUT | ~34% | 71.3% | **75.5%** | no |
+| CYCLE | ~47% | 49.8% | **52.4%** | yes |
+| RANDOM | ~45% | 54.5% | **50.7%** | no |
+| FAN-IN | ~22% | 54.1% | **50.6%** | no |
+| STACK | ~17% | 24.4% | **24.0%** | no |
+| BIPARTITE | ~10% | 12.2% | **12.0%** | no |
 
-Mini-batch training roughly doubled recall on the loop-free typologies, and the
-extra capacity lifted every one again — FAN-OUT 55→71, FAN-IN 46→54. Even
-**BIPARTITE finally moved** (9→12%), though it stays the hardest: its blocks are
-sparse (degree 1-5), embedded in the giant component (98% of BIPARTITE accounts),
-and 4-cycle / hub-proximity / component features all showed no signal there.
+Mini-batch training roughly doubled recall on the loop-free typologies; the third
+hop mainly sharpened the top of the ranking (precision 0.62 → 0.77) rather than
+adding recall. **BIPARTITE stays the hardest** (~12%): its blocks are sparse
+(degree 1-5), embedded in the giant component (98% of BIPARTITE accounts), and
+4-cycle / hub-proximity / component / transaction-amount features all showed no
+signal there.
 
 ### vs the detectors
 
 | | recall |
 |---|---|
-| GNN | **54.1%** |
+| GNN | **54.6%** |
 | cycle + Louvain detectors | 3.9% |
 
-1,637 accounts flagged by the GNN alone, missed by every detector, confirmed by
-ground truth (was 1,459 at h192, 547 before quantile/structural). The hidden-192
-variant (`v8_minibatch`, test PR-AUC 0.65) is a ~1.8× cheaper alternative.
+1,657 accounts flagged by the GNN alone, missed by every detector, confirmed by
+ground truth (was 1,459 at h192, 547 before quantile/structural). The hidden-256
+2-layer variant (`v9_h256`, test PR-AUC 0.66) is a cheaper-to-train alternative.
 
-### Ensemble — max performance (`ml/ensemble.py`)
+### Ensemble — `ml/ensemble.py`
 
-A 3-seed average of h256 mini-batch members reaches **test PR-AUC 0.695**, ROC
-0.987, GNN recall 57% — a clean +0.03 over the single model. Crucially this is
-where ensembling *finally pays off*: the full-batch seed-ensemble was a wash
+A 3-seed average of h256 **L2** mini-batch members reaches test PR-AUC 0.695, ROC
+0.987 — a clean +0.03 over the single L2 model, though the single **L3** champion
+(0.724) already beats it, so an L3 ensemble is the natural next push. Crucially
+this is where ensembling *finally pays off*: the full-batch seed-ensemble was a wash
 (+0.007) because its members were near-identical, but mini-batch draws a fresh
 random neighbourhood every step, so different seeds land on genuinely different
 functions and averaging cancels the residual variance. The cost is 3× inference,
@@ -182,12 +193,15 @@ python3 -m ml.datasets.run_louvain                                # ~4 min
 python3 -m ml.train --refresh-cache --cache ml/cache/featureset_v4.npz \
     --scaler quantile --bidirectional --minibatch \
     --train-frac 0.60 --val-frac 0.15 \
-    --hidden 256 --dropout 0.3 --lr 0.005 --gamma 2.0 \
+    --hidden 256 --num-layers 3 --dropout 0.3 --lr 0.005 --gamma 2.0 \
     --mb-batch 512 --mb-k 10 --mb-pos-frac 0.25 --mb-steps 300 \
-    --epochs 30 --patience 15 --run-name v9_h256
+    --epochs 14 --patience 6 --run-name v10_L3
 python3 -m ml.sweep --preset shift --cache ml/cache/featureset_v4.npz   # the ablation
-python3 -m ml.predict --run ml/runs/v9_h256 --cache ml/cache/featureset_v4.npz --top 20
+python3 -m ml.predict --run ml/runs/v10_L3 --cache ml/cache/featureset_v4.npz --top 20
 ```
+
+Note the third hop needs the full `--mb-k 10` fanout — at k=8 the 3-hop
+neighbourhood is sampled too sparsely and L3 underperforms L2 (0.65 vs 0.66).
 
 ## Honest limitations
 

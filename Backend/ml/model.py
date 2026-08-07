@@ -18,10 +18,12 @@ and no retraining — the property the whole streaming design rests on.
 
 Depth is 2 by default. Each layer is one hop, so 2 layers means every account is
 represented by its own features plus a learned summary of its 2-hop
-neighbourhood. Stacking more layers to "see further" backfires: deep GNNs
-oversmooth, with every node's representation converging toward the same average.
-Long-range structure is the cycle detector's job, and it arrives here as a
-feature.
+neighbourhood. Under FULL-BATCH training a third layer backfires — deep GNNs
+oversmooth, every node's representation converging toward the same average — but
+that turned out to be a training artefact, not a depth limit: with mini-batch
+neighbour sampling (ml/sampler.py) a 3-layer model trains cleanly through it and
+is the champion (test PR-AUC 0.66 → 0.72). The third hop needs enough fanout
+(sample k≈10 per hop) or the 3-hop neighbourhood is too sparse to help.
 
 DIRECTIONALITY
 --------------
