@@ -23,14 +23,15 @@ positives; every row same regularization, seed 42):
 | + structural features (k-core, …) | 0.3419 | 0.4092 | 0.9778 |
 | + capacity (hidden 192) | 0.3478 | 0.4216 | 0.9769 |
 | + motif features | 0.4056 | 0.4601 | 0.9785 |
-| **+ mini-batch training (champion)** | 0.6376 | 0.6499 | 0.9889 |
+| + mini-batch training (h192) | 0.6376 | 0.6499 | 0.9889 |
+| **+ capacity h256 (champion)** | 0.6407 | 0.6640 | 0.9839 |
 
 (The first five rows are a controlled h128 ablation, one change at a time; the
-last three add capacity, motif features, and mini-batch training to reach the
-champion.)
+last four add capacity, motifs, mini-batch training, and more capacity to reach
+the champion.)
 
-**Test PR-AUC 0.057 → 0.65 (~11×), test ROC 0.94 → 0.99, test recall 0.60 at 66%
-precision.** Note validation barely moves for the quantile change: its entire benefit
+**Test PR-AUC 0.057 → 0.66 (~12×), test ROC 0.94 → 0.98, whole-graph GNN recall
+3.9% (detectors) → 54%.** Note validation barely moves for the quantile change: its entire benefit
 lives on the shifted future, so it is invisible to a validation-only sweep and
 has to be read on test. That is also why the earlier "remove regularization →
 val 0.44" result was a trap — that config scored test ROC 0.50, pure memorization
@@ -104,53 +105,54 @@ vectorized numpy over CSR adjacency — no `pyg-lib` / `torch-sparse` install.
   SCATTER-GATHER instead and left BIPARTITE flat (label correlation 0.04). A
   well-investigated dead end; BIPARTITE needs non-topological signal.
 
-## Champion — `ml/runs/v8_minibatch`
+## Champion — `ml/runs/v9_h256`
 
-Bidirectional GraphSAGE (hidden 192, 2 layers, dropout 0.3), quantile scaler,
+Bidirectional GraphSAGE (hidden 256, 2 layers, dropout 0.3), quantile scaler,
 47 features (38 + 5 structural + 4 motif), Focal Loss (γ=2), trained with
-neighbour-sampled **class-balanced mini-batches** (`ml/sampler.py`).
+neighbour-sampled **class-balanced mini-batches** (`ml/sampler.py`). Widening to
+256 under mini-batch training — full-batch overfit at that size — added a clean
++0.014 test PR-AUC and +6pt whole-graph recall.
 
 ```
-best val PR-AUC 0.6376
-TEST   PR-AUC 0.6499   ROC-AUC 0.9889
-       precision 0.661   recall 0.587   F1 0.622
-       TP 242  FP 124  FN 170  support 412  (test prevalence 0.32%)
+best val PR-AUC 0.6407
+TEST   PR-AUC 0.6640   ROC-AUC 0.9839
+       precision 0.623   recall 0.641   F1 0.632
+       (test prevalence 0.32%)
 ```
 
-At 0.32% test prevalence a random ranker scores PR-AUC ≈ 0.003, so 0.65 is ~210×
-better than random. Mini-batch training lifted precision *and* recall together —
-the full-batch model sat at 0.72 / 0.31, this one at 0.66 / **0.59**, nearly
-doubling recall. Whole-graph GNN recall reached 48%, flagging 1,911 accounts at
-76% precision.
+At 0.32% test prevalence a random ranker scores PR-AUC ≈ 0.003, so 0.66 is ~210×
+better than random. Whole-graph **GNN recall reached 54%**, flagging 2,312
+accounts at 71% precision — **1,637 confirmed accounts no detector found**.
 
 ### Recall by typology (whole graph, at the F1 threshold)
 
-| typology | full-batch (v6) | mini-batch (v8) | reachable by cycle detection? |
-|---|---|---|---|
-| SCATTER-GATHER | ~70% | **85.9%** | no |
-| GATHER-SCATTER | ~50% | **85.3%** | no |
-| FAN-OUT | ~34% | **54.9%** | no |
-| CYCLE | ~47% | **47.6%** | yes |
-| RANDOM | ~45% | **46.0%** | no |
-| FAN-IN | ~22% | **45.6%** | no |
-| STACK | ~17% | **21.0%** | no |
-| BIPARTITE | ~10% | 8.6% | no |
+| typology | full-batch (v6) | mini-batch h192 (v8) | mini-batch h256 (champion) | reachable by cycle? |
+|---|---|---|---|---|
+| SCATTER-GATHER | ~70% | 85.9% | **89.7%** | no |
+| GATHER-SCATTER | ~50% | 85.3% | **89.3%** | no |
+| FAN-OUT | ~34% | 54.9% | **71.3%** | no |
+| RANDOM | ~45% | 46.0% | **54.5%** | no |
+| FAN-IN | ~22% | 45.6% | **54.1%** | no |
+| CYCLE | ~47% | 47.6% | **49.8%** | yes |
+| STACK | ~17% | 21.0% | **24.4%** | no |
+| BIPARTITE | ~10% | 8.6% | **12.2%** | no |
 
-The balanced batches roughly doubled recall on the loop-free typologies (FAN-IN
-22→46, FAN-OUT 34→55, GATHER-SCATTER 50→85). **BIPARTITE alone did not move** —
-a genuine limitation confirmed by investigation: its blocks are sparse (degree
-1-5), embedded in the giant component (98% of BIPARTITE accounts), and 4-cycle /
-hub-proximity / connected-component features all showed no signal there.
+Mini-batch training roughly doubled recall on the loop-free typologies, and the
+extra capacity lifted every one again — FAN-OUT 55→71, FAN-IN 46→54. Even
+**BIPARTITE finally moved** (9→12%), though it stays the hardest: its blocks are
+sparse (degree 1-5), embedded in the giant component (98% of BIPARTITE accounts),
+and 4-cycle / hub-proximity / component features all showed no signal there.
 
 ### vs the detectors
 
 | | recall |
 |---|---|
-| GNN | **48.3%** |
+| GNN | **54.1%** |
 | cycle + Louvain detectors | 3.9% |
 
-1,459 accounts flagged by the GNN alone, missed by every detector, confirmed by
-ground truth (was 979 at full-batch, 547 before quantile/structural).
+1,637 accounts flagged by the GNN alone, missed by every detector, confirmed by
+ground truth (was 1,459 at h192, 547 before quantile/structural). The hidden-192
+variant (`v8_minibatch`, test PR-AUC 0.65) is a ~1.8× cheaper alternative.
 
 ## Reproducing
 
@@ -164,11 +166,11 @@ python3 -m ml.datasets.run_louvain                                # ~4 min
 python3 -m ml.train --refresh-cache --cache ml/cache/featureset_v4.npz \
     --scaler quantile --bidirectional --minibatch \
     --train-frac 0.60 --val-frac 0.15 \
-    --hidden 192 --dropout 0.3 --lr 0.005 --gamma 2.0 \
+    --hidden 256 --dropout 0.3 --lr 0.005 --gamma 2.0 \
     --mb-batch 512 --mb-k 10 --mb-pos-frac 0.25 --mb-steps 300 \
-    --epochs 20 --patience 12 --run-name v8_minibatch
+    --epochs 30 --patience 15 --run-name v9_h256
 python3 -m ml.sweep --preset shift --cache ml/cache/featureset_v4.npz   # the ablation
-python3 -m ml.predict --run ml/runs/v8_minibatch --cache ml/cache/featureset_v4.npz --top 20
+python3 -m ml.predict --run ml/runs/v9_h256 --cache ml/cache/featureset_v4.npz --top 20
 ```
 
 ## Honest limitations
