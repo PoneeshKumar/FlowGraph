@@ -31,8 +31,8 @@ positives; every row same regularization, seed 42):
 last five add capacity, motifs, mini-batch training, more capacity, and a third
 hop to reach the champion.)
 
-**Test PR-AUC 0.057 → 0.72 (~13×), test ROC 0.94 → 0.99, whole-graph GNN recall
-3.9% (detectors) → 55% at 78% precision.** Note
+**Test PR-AUC 0.057 → 0.72 single / 0.735 ensemble (~13×), test ROC 0.94 → 0.99,
+whole-graph GNN recall 3.9% (detectors) → 55–59% at ~78% precision.** Note
 validation barely moves for the quantile change: its entire benefit
 lives on the shifted future, so it is invisible to a validation-only sweep and
 has to be read on test. That is also why the earlier "remove regularization →
@@ -164,20 +164,20 @@ signal there.
 ground truth (was 1,459 at h192, 547 before quantile/structural). The hidden-256
 2-layer variant (`v9_h256`, test PR-AUC 0.66) is a cheaper-to-train alternative.
 
-### Ensemble — `ml/ensemble.py`
+### Ensemble — max performance (`ml/ensemble.py`)
 
-A 3-seed average of h256 **L2** mini-batch members reaches test PR-AUC 0.695, ROC
-0.987 — a clean +0.03 over the single L2 model, though the single **L3** champion
-(0.724) already beats it, so an L3 ensemble is the natural next push. Crucially
-this is where ensembling *finally pays off*: the full-batch seed-ensemble was a wash
-(+0.007) because its members were near-identical, but mini-batch draws a fresh
-random neighbourhood every step, so different seeds land on genuinely different
-functions and averaging cancels the residual variance. The cost is 3× inference,
-so it suits an offline/batch scoring pass rather than the streaming path; the
-single `v9_h256` is the deployable default.
+A 3-seed average of the L3 champion reaches **test PR-AUC 0.735**, ROC **0.992**,
+and lifts whole-graph **GNN recall 55% → 59%** — every typology up (CYCLE 52→62,
+FAN-IN 51→59, FAN-OUT 75→81, SCATTER/GATHER →94%). Crucially this is where
+ensembling *pays off*: the full-batch seed-ensemble was a wash (+0.007) because
+its members were near-identical, but mini-batch draws a fresh random
+neighbourhood every step, so different seeds land on genuinely different functions
+and averaging cancels the residual variance. The cost is 3× inference, so it
+suits an offline/batch scoring pass; the single `v10_L3` is the deployable
+default. (The gain saturates by two members — 0.736 at k=2, 0.735 at k=3.)
 
 ```bash
-python3 -m ml.ensemble --runs ml/runs/v9_h256 ml/runs/v9_h256_s1 ml/runs/v9_h256_s7 \
+python3 -m ml.ensemble --runs ml/runs/v10_L3 ml/runs/v10_L3_s1 ml/runs/v10_L3_s7 \
     --cache ml/cache/featureset_v4.npz --top 20
 ```
 
