@@ -58,3 +58,7 @@ htmlcov/
 # Temporary files
 *.tmp
 *.log
+
+# Trained artefacts and feature caches (regenerate with ml/train.py)
+ml/cache/
+ml/runs/

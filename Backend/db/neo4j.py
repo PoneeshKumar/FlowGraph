@@ -15,7 +15,7 @@ Edge model:
 
 import logging
 from datetime import datetime, timezone
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Sequence
 
 from neo4j import AsyncGraphDatabase, AsyncDriver, AsyncSession, Query
 from neo4j.exceptions import ServiceUnavailable
@@ -384,8 +384,14 @@ class Neo4jClient:
             reference_time: Window anchor; defaults to now (benchmarks anchor
                             to the dataset's own max timestamp instead)
 
+        first_ts/last_ts are returned so callers can derive per-account activity
+        times. Nothing else surfaces them: Account.created_at records when the
+        outbox inserted the node, not when the account was first active, so it
+        is useless as an age signal on a historical dataset. Existing readers
+        index by key and ignore the extra fields.
+
         Returns:
-            List of dicts: {src, dst, total_amount, tx_count}
+            List of dicts: {src, dst, total_amount, tx_count, first_ts, last_ts}
         """
         ref = reference_time if reference_time is not None else datetime.now(timezone.utc)
         window_start_epoch = int(ref.timestamp()) - window_days * 86400
@@ -394,7 +400,8 @@ class Neo4jClient:
         MATCH (a:Account)-[f:FLOWS_TO]->(b:Account)
         WHERE f.last_ts >= $window_start_epoch
         RETURN a.id AS src, b.id AS dst,
-               f.total_amount AS total_amount, f.tx_count AS tx_count
+               f.total_amount AS total_amount, f.tx_count AS tx_count,
+               f.first_ts AS first_ts, f.last_ts AS last_ts
         """
         # Batch export may legitimately take longer than the per-account cycle
         # budget, but must still be bounded — an unindexed runaway scan cannot
@@ -412,11 +419,352 @@ class Neo4jClient:
                         "dst":          record["dst"],
                         "total_amount": record["total_amount"],
                         "tx_count":     record["tx_count"],
+                        "first_ts":     record["first_ts"],
+                        "last_ts":      record["last_ts"],
                     }
                     async for record in result
                 ]
         except Exception as e:
             logger.error(f"Failed to export FLOWS_TO edges: {e}")
+            raise
+
+    async def bulk_upsert_transactions(
+        self,
+        transactions: Sequence[Dict[str, Any]],
+        batch_size: int = 1000,
+    ) -> int:
+        """
+        Batched UNWIND write of many transactions — for dataset ingestion only.
+
+        The streaming path (upsert_transaction_graph) issues one Cypher round
+        trip per payment AND recomputes local PageRank per payment, which is
+        roughly three round trips each. That is correct for a live stream and
+        hopeless for bulk: 5M rows would be ~15M queries. This writes
+        batch_size rows per round trip and skips PageRank entirely — call
+        recompute_pagerank_full() once after the load instead.
+
+        Graph semantics are identical to upsert_transaction_graph: TRANSFER
+        MERGEd on txn_id, FLOWS_TO MERGEd on the account pair with aggregates
+        incremented. UNWIND rows are applied in order within one transaction and
+        MERGE sees earlier writes from the same transaction, so repeated account
+        pairs inside a batch accumulate correctly rather than overwriting.
+
+        Rows sharing a transaction_id are deduplicated within each batch.
+        txn_id is the declared idempotency key, so two rows carrying the same
+        one are the same payment: TRANSFER would MERGE to a single edge anyway,
+        while FLOWS_TO aggregates would double-count without this. Dedup is
+        per-batch only — a repeat that straddles two batches still inflates the
+        aggregates, as it would on the streaming path.
+
+        Args:
+            transactions: Dicts with sender_id, receiver_id, amount_cents,
+                          timestamp_utc (datetime or unix seconds), rail,
+                          event_type, transaction_id.
+            batch_size:   Rows per round trip.
+
+        Returns:
+            Count of rows actually written after dedup.
+        """
+        if not self.driver:
+            logger.debug("Neo4j driver not initialized; skipping bulk upsert")
+            return 0
+        if not transactions:
+            return 0
+        if batch_size < 1:
+            raise ValueError(f"batch_size must be >= 1, got {batch_size}")
+
+        query = """
+        UNWIND $rows AS row
+        MERGE (src:Account {id: row.sender_id})
+          ON CREATE SET src.created_at = timestamp()
+        MERGE (dst:Account {id: row.receiver_id})
+          ON CREATE SET dst.created_at = timestamp()
+        MERGE (src)-[t:TRANSFER {txn_id: row.transaction_id}]->(dst)
+          ON CREATE SET
+            t.amount_cents = row.amount_cents,
+            t.ts           = row.timestamp_utc,
+            t.rail         = row.rail,
+            t.event_type   = row.event_type,
+            t.created_at   = timestamp()
+        MERGE (src)-[f:FLOWS_TO]->(dst)
+          ON CREATE SET
+            f.tx_count     = 1,
+            f.total_amount = row.amount_cents,
+            f.first_ts     = row.timestamp_utc,
+            f.last_ts      = row.timestamp_utc,
+            f.min_amount   = row.amount_cents,
+            f.max_amount   = row.amount_cents,
+            f.rail         = row.rail
+          ON MATCH SET
+            f.tx_count     = f.tx_count + 1,
+            f.total_amount = f.total_amount + row.amount_cents,
+            f.first_ts     = CASE WHEN row.timestamp_utc < f.first_ts THEN row.timestamp_utc ELSE f.first_ts END,
+            f.last_ts      = CASE WHEN row.timestamp_utc > f.last_ts  THEN row.timestamp_utc ELSE f.last_ts END,
+            f.min_amount   = CASE WHEN row.amount_cents < f.min_amount THEN row.amount_cents ELSE f.min_amount END,
+            f.max_amount   = CASE WHEN row.amount_cents > f.max_amount THEN row.amount_cents ELSE f.max_amount END
+        """
+
+        written = 0
+        for start in range(0, len(transactions), batch_size):
+            chunk = transactions[start : start + batch_size]
+
+            seen: set = set()
+            rows: List[Dict[str, Any]] = []
+            for txn in chunk:
+                txn_id = txn["transaction_id"]
+                if txn_id in seen:
+                    continue
+                seen.add(txn_id)
+
+                timestamp = txn["timestamp_utc"]
+                if isinstance(timestamp, datetime):
+                    timestamp = int(timestamp.timestamp())
+
+                rows.append(
+                    {
+                        "sender_id": txn["sender_id"],
+                        "receiver_id": txn["receiver_id"],
+                        "amount_cents": int(txn["amount_cents"]),
+                        "timestamp_utc": int(timestamp),
+                        "rail": txn["rail"],
+                        "event_type": txn["event_type"],
+                        "transaction_id": txn_id,
+                    }
+                )
+
+            if not rows:
+                continue
+
+            try:
+                async with self.driver.session(database=NEO4J_DATABASE) as session:
+                    await session.run(query, rows=rows)
+                written += len(rows)
+            except Exception as e:
+                logger.error(
+                    f"Bulk upsert failed on batch at offset {start}: {e}"
+                )
+                raise
+
+        logger.info(f"Bulk upsert wrote {written} transactions")
+        return written
+
+    async def recompute_pagerank_full(
+        self,
+        window_days: int = 365,
+        reference_time: Optional[datetime] = None,
+        write_batch_size: int = 10_000,
+        damping: float = 0.85,
+        max_iterations: int = 100,
+        export_timeout_seconds: float = 1800.0,
+    ) -> int:
+        """
+        Recompute PageRank across the whole graph and persist every score.
+
+        The counterpart to bulk_upsert_transactions, which skips the
+        per-transaction PageRank the streaming path does. Run this once after a
+        dataset load.
+
+        Uses compute_pagerank_sparse, not compute_weighted_pagerank: the latter
+        allocates a dense node_count^2 matrix and cannot survive a real graph
+        (515k accounts would need ~2.1 PB).
+
+        Args:
+            window_days:      Only FLOWS_TO edges active within this window.
+                              Defaults to a year so a whole dataset is covered,
+                              unlike the Louvain default.
+            reference_time:   Window anchor; defaults to now. Historical
+                              datasets should anchor to their own max ts, or
+                              every edge looks stale.
+            write_batch_size: Accounts per score-write round trip.
+            export_timeout_seconds:
+                              Timeout for the edge export. Must be far larger
+                              than LOUVAIN_EXPORT_TIMEOUT_SECONDS (120s), which
+                              export_flows_to_edges defaults to: that budget is
+                              sized for the Louvain window, and a whole-graph
+                              export blows straight through it. Observed on the
+                              HI-Small load — 1,010,384 FLOWS_TO edges timed out
+                              at 120s and killed the run after the data had
+                              already been written.
+
+        Returns:
+            Number of accounts whose score was written.
+        """
+        if not self.driver:
+            logger.debug("Neo4j driver not initialized; skipping PageRank recompute")
+            return 0
+
+        from algorithms.pagerank import compute_pagerank_sparse
+
+        edges = await self.export_flows_to_edges(
+            window_days=window_days,
+            reference_time=reference_time,
+            query_timeout_seconds=export_timeout_seconds,
+        )
+        if not edges:
+            logger.warning("No FLOWS_TO edges in window; nothing to score")
+            return 0
+
+        scores = compute_pagerank_sparse(
+            (
+                (e["src"], e["dst"], float(e.get("total_amount") or 0.0))
+                for e in edges
+            ),
+            damping=damping,
+            max_iterations=max_iterations,
+        )
+        if not scores:
+            return 0
+
+        update_query = """
+        UNWIND $updates AS update
+        MATCH (n:Account {id: update.account_id})
+        SET n.pagerank_score = update.score,
+            n.pagerank_updated_at = timestamp()
+        """
+
+        updates = [
+            {"account_id": account_id, "score": round(score, 10)}
+            for account_id, score in sorted(scores.items())
+        ]
+
+        written = 0
+        for start in range(0, len(updates), write_batch_size):
+            chunk = updates[start : start + write_batch_size]
+            try:
+                async with self.driver.session(database=NEO4J_DATABASE) as session:
+                    await session.run(update_query, updates=chunk)
+                written += len(chunk)
+            except Exception as e:
+                logger.error(f"PageRank write failed at offset {start}: {e}")
+                raise
+
+        logger.info(
+            f"PageRank recomputed over {len(edges)} edges, "
+            f"{written} account scores written"
+        )
+        return written
+
+    async def get_flows_to_timestamp(
+        self, percentile: float = 1.0
+    ) -> Optional[int]:
+        """
+        A FLOWS_TO.last_ts quantile, as unix seconds — for anchoring time windows.
+
+        Needed because the data is historical. IBM AML is from 2022, so anchoring
+        the Redis 1h/24h/7d windows at wall-clock now makes every ZRANGEBYSCORE
+        match nothing and silently zeroes 12 of the 29 feature columns.
+
+        percentile defaults below 1.0 for a reason. The absolute max is often a
+        near-empty tail: measured on HI-Small, 2022-09-01..09-10 holds 5,076,237
+        transactions and 09-11..09-18 holds 1,108. Anchoring at the max (09-18)
+        put only 533 of 513,987 accounts inside the 7-day window. A high
+        quantile lands where the data actually is.
+
+        A dedicated aggregation rather than reading it off export_flows_to_edges,
+        which returns only src/dst/total_amount/tx_count — and which would mean
+        streaming a million rows to learn one number.
+
+        Args:
+            percentile: 1.0 for the true max, or a quantile in (0, 1) — 0.999
+                        skips a sparse tail without moving materially into the
+                        bulk of the data.
+
+        Returns:
+            Unix seconds, or None on an empty graph.
+        """
+        if not self.driver:
+            return None
+        if not 0.0 < percentile <= 1.0:
+            raise ValueError(f"percentile must be in (0, 1], got {percentile}")
+
+        if percentile >= 1.0:
+            query = """
+            MATCH ()-[f:FLOWS_TO]->()
+            RETURN max(f.last_ts) AS max_ts
+            """
+        else:
+            query = """
+            MATCH ()-[f:FLOWS_TO]->()
+            RETURN percentileDisc(f.last_ts, $percentile) AS max_ts
+            """
+        try:
+            async with self.driver.session(database=NEO4J_DATABASE) as session:
+                if percentile >= 1.0:
+                    result = await session.run(query)
+                else:
+                    result = await session.run(query, percentile=percentile)
+                record = await result.single()
+        except Exception as e:
+            logger.error(f"Failed to read FLOWS_TO timestamp quantile: {e}")
+            raise
+
+        if not record or record["max_ts"] is None:
+            return None
+        return int(record["max_ts"])
+
+    async def export_account_nodes(
+        self,
+        query_timeout_seconds: float = LOUVAIN_EXPORT_TIMEOUT_SECONDS,
+    ) -> List[Dict[str, Any]]:
+        """
+        Export every graph node with the properties the GNN features read.
+
+        Companion to export_flows_to_edges: that gives the edges, this gives
+        the nodes. Together they are everything the feature builder needs from
+        Neo4j.
+
+        `labels` comes back so node type can be one-hot encoded. Today the
+        consumer only ever MERGEs `:Account` (see upsert_transaction_graph),
+        so Merchant/Bank/Exchange will be empty until something creates them.
+
+        kyc_tier / risk_score / country / account_age / cumulative_volume are
+        returned even though nothing populates them yet — create_account_node
+        is the only writer and is never called in production. They come back
+        as None, the feature builder skips them, and they start contributing
+        automatically once ingestion fills them in.
+
+        Returns:
+            List of dicts, one per node, keyed by property name.
+        """
+        query = """
+        MATCH (n)
+        WHERE n:Account OR n:Merchant OR n:Bank OR n:Exchange
+        RETURN n.id                AS id,
+               labels(n)           AS labels,
+               n.pagerank_score    AS pagerank_score,
+               n.community_id      AS community_id,
+               n.created_at        AS created_at,
+               n.kyc_tier          AS kyc_tier,
+               n.risk_score        AS risk_score,
+               n.country           AS country,
+               n.account_age       AS account_age,
+               n.cumulative_volume AS cumulative_volume
+        """
+        # Same reasoning as export_flows_to_edges: a full-graph scan may run
+        # long but must stay bounded.
+        timed_query = Query(query, timeout=query_timeout_seconds)
+
+        try:
+            async with self.driver.session(database=NEO4J_DATABASE) as session:
+                result = await session.run(timed_query)
+                return [
+                    {
+                        "id":                record["id"],
+                        "labels":            list(record["labels"] or []),
+                        "pagerank_score":    record["pagerank_score"],
+                        "community_id":      record["community_id"],
+                        "created_at":        record["created_at"],
+                        "kyc_tier":          record["kyc_tier"],
+                        "risk_score":        record["risk_score"],
+                        "country":           record["country"],
+                        "account_age":       record["account_age"],
+                        "cumulative_volume": record["cumulative_volume"],
+                    }
+                    async for record in result
+                    if record["id"]
+                ]
+        except Exception as e:
+            logger.error(f"Failed to export account nodes: {e}")
             raise
 
     async def write_community_assignments(

@@ -6,8 +6,8 @@ Stores transaction amounts as sorted sets (ZSET) keyed by edge, scored by timest
 """
 
 import logging
-from typing import Any, Dict, List, Optional, Tuple
-from datetime import datetime, timedelta
+from typing import Any, Dict, List, Optional, Sequence, Tuple
+from datetime import datetime, timedelta, timezone
 
 import redis.asyncio as redis
 from redis.asyncio import Redis as RedisClient
@@ -16,6 +16,17 @@ from redis.exceptions import RedisError
 from config import REDIS_URL, REDIS_ENCODING
 
 logger = logging.getLogger(__name__)
+
+
+def _window_label(hours: int) -> str:
+    """Render a window width as the naming CLAUDE.md uses: 1h / 24h / 7d.
+
+    Days are only used from 48h up, so 24 stays "24h" rather than becoming
+    "1d" — these labels end up as GNN feature names and must stay stable.
+    """
+    if hours >= 48 and hours % 24 == 0:
+        return f"{hours // 24}d"
+    return f"{hours}h"
 
 
 class RedisClient:
@@ -273,6 +284,210 @@ class RedisClient:
             }
         except RedisError as e:
             logger.error(f"Failed to get account in-degree: {e}")
+            raise
+
+    async def bulk_add_edges_to_timeseries(
+        self,
+        edges: Sequence[Dict[str, Any]],
+        batch_size: int = 1000,
+        ttl_seconds: int = 30 * 24 * 3600,
+    ) -> int:
+        """
+        Pipelined ZADD of many transactions — for dataset ingestion only.
+
+        add_edge_to_timeseries issues two round trips per transaction (ZADD then
+        EXPIRE), which is fine for a live stream and far too slow for millions of
+        rows. This pipelines a whole batch into one round trip.
+
+        Matters for GNN training specifically: 12 of the 29 node features are
+        the Redis 1h/24h/7d windows, so skipping this leaves them all zero and
+        throws away every temporal signal.
+
+        Member encoding matches add_edge_to_timeseries exactly —
+        "{amount_cents}|{unix_ts}" scored by unix_ts — so
+        get_all_account_volumes and get_edge_volume_in_window read it back
+        unchanged.
+
+        Args:
+            edges:       Dicts with sender_id, receiver_id, amount_cents, and
+                         timestamp_utc (datetime or unix seconds).
+            batch_size:  Transactions per pipeline flush.
+            ttl_seconds: Edge key TTL. Wall-clock, so historical datasets still
+                         expire 30 days after loading, not 30 days after their
+                         own timestamps.
+
+        Returns:
+            Number of transactions written.
+        """
+        if not edges:
+            return 0
+        if batch_size < 1:
+            raise ValueError(f"batch_size must be >= 1, got {batch_size}")
+
+        written = 0
+        try:
+            for start in range(0, len(edges), batch_size):
+                chunk = edges[start : start + batch_size]
+
+                async with self.client.pipeline(transaction=False) as pipe:
+                    touched_keys = set()
+                    for edge in chunk:
+                        timestamp = edge["timestamp_utc"]
+                        if isinstance(timestamp, datetime):
+                            timestamp = int(timestamp.timestamp())
+                        timestamp = int(timestamp)
+
+                        amount_cents = int(edge["amount_cents"])
+                        edge_key = f"edge:{edge['sender_id']}:{edge['receiver_id']}"
+                        member = f"{amount_cents}|{timestamp}"
+
+                        pipe.zadd(edge_key, {member: timestamp})
+                        touched_keys.add(edge_key)
+
+                    # One EXPIRE per distinct key, not per transaction — a busy
+                    # account pair would otherwise re-issue it hundreds of times.
+                    for edge_key in touched_keys:
+                        pipe.expire(edge_key, ttl_seconds)
+
+                    await pipe.execute()
+
+                written += len(chunk)
+        except RedisError as e:
+            logger.error(f"Bulk edge timeseries write failed: {e}")
+            raise
+
+        logger.info(f"Bulk Redis write: {written} transactions")
+        return written
+
+    async def get_all_account_volumes(
+        self,
+        windows_hours: Tuple[int, ...] = (1, 24, 168),
+        reference_time: Optional[datetime] = None,
+        scan_count: int = 500,
+    ) -> Dict[str, Dict[str, float]]:
+        """
+        Windowed in/out volume and txn count for EVERY account, in one pass.
+
+        This exists because get_account_in_degree cannot be used to build a
+        feature matrix: it runs a full `SCAN match=edge:*:{account}` per
+        account and then one ZRANGEBYSCORE per matching key, so extracting
+        features for N accounts costs O(keyspace x N). Here the keyspace is
+        scanned once and every account's windows are filled from the same
+        member list, giving O(keyspace) regardless of account count.
+
+        All windows are derived from a single fetch per edge: members are read
+        once over the WIDEST window, then bucketed into the narrower ones in
+        Python. Reading the same ZSET once per window would be pure waste.
+
+        Times are UTC-aware. Note this deliberately does NOT reuse
+        get_edge_volume_in_window, which computes `now` via
+        datetime.utcnow().timestamp() — that treats a naive UTC datetime as
+        local time and so skews the window by the host's UTC offset.
+
+        Args:
+            windows_hours: Window widths in hours. Default (1, 24, 168) is the
+                           1h / 24h / 7d triple the GNN node features use.
+            reference_time: Window anchor; defaults to now. Tests and
+                            benchmarks anchor to the dataset's own max ts.
+            scan_count:     SCAN batch hint.
+
+        Returns:
+            {account_id: {"volume_out_1h": float, "volume_in_1h": float,
+                          "txn_out_1h": float, "txn_in_1h": float, ...}}
+            One group of four keys per requested window. Accounts absent from
+            Redis are simply absent here; callers zero-fill.
+        """
+        if not windows_hours:
+            raise ValueError("windows_hours must not be empty")
+
+        ref = reference_time if reference_time is not None else datetime.now(timezone.utc)
+        now_epoch = int(ref.timestamp())
+
+        # Widest window bounds the single fetch; the rest are bucketed from it.
+        widest_hours = max(windows_hours)
+        min_epoch = now_epoch - widest_hours * 3600
+
+        # Precompute each window's lower bound once, not per member.
+        window_floors = [(hours, now_epoch - hours * 3600) for hours in windows_hours]
+
+        def _empty() -> Dict[str, float]:
+            metrics: Dict[str, float] = {}
+            for hours, _ in window_floors:
+                label = _window_label(hours)
+                metrics[f"volume_out_{label}"] = 0.0
+                metrics[f"volume_in_{label}"] = 0.0
+                metrics[f"txn_out_{label}"] = 0.0
+                metrics[f"txn_in_{label}"] = 0.0
+            return metrics
+
+        volumes: Dict[str, Dict[str, float]] = {}
+        cursor = 0
+
+        try:
+            while True:
+                cursor, keys = await self.client.scan(
+                    cursor, match="edge:*", count=scan_count
+                )
+
+                # Edge keys are `edge:{sender}:{receiver}`. Anything else is
+                # not ours (or an id containing ':') — skip rather than guess.
+                edges = []
+                for key in keys:
+                    parts = key.split(":")
+                    if len(parts) == 3 and parts[1] and parts[2]:
+                        edges.append((parts[1], parts[2]))
+
+                if edges:
+                    # One round trip for the whole SCAN batch instead of one
+                    # per edge. transaction=False — these are reads.
+                    async with self.client.pipeline(transaction=False) as pipe:
+                        for sender_id, receiver_id in edges:
+                            pipe.zrangebyscore(
+                                f"edge:{sender_id}:{receiver_id}",
+                                min=min_epoch,
+                                max=now_epoch,
+                            )
+                        batch_members = await pipe.execute()
+
+                    for (sender_id, receiver_id), members in zip(edges, batch_members):
+                        if not members:
+                            continue
+
+                        sender = volumes.setdefault(sender_id, _empty())
+                        receiver = volumes.setdefault(receiver_id, _empty())
+
+                        for member in members:
+                            parts = member.split("|")
+                            if len(parts) < 2:
+                                continue
+                            try:
+                                amount_cents = float(parts[0])
+                                ts = int(parts[1])
+                            except ValueError:
+                                # Malformed member — skip it rather than
+                                # poisoning the whole account's features.
+                                continue
+
+                            for hours, floor in window_floors:
+                                if ts < floor:
+                                    continue
+                                label = _window_label(hours)
+                                # Sender paid out; receiver took in.
+                                sender[f"volume_out_{label}"] += amount_cents
+                                sender[f"txn_out_{label}"] += 1.0
+                                receiver[f"volume_in_{label}"] += amount_cents
+                                receiver[f"txn_in_{label}"] += 1.0
+
+                if cursor == 0:
+                    break
+
+            logger.info(
+                f"Bulk volume scan complete: {len(volumes)} accounts, "
+                f"windows={windows_hours}"
+            )
+            return volumes
+        except RedisError as e:
+            logger.error(f"Failed bulk account volume scan: {e}")
             raise
 
     async def cache_set(

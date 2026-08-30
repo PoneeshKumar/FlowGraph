@@ -147,6 +147,91 @@ class TestNeo4jClient:
         assert result == {}
 
     @pytest.mark.asyncio
+    async def test_export_account_nodes_returns_gnn_feature_properties(self):
+        """The node half of the GNN feature export.
+
+        Checks the query covers all four schema node types and that rows are
+        parsed into the shape ml.features expects.
+        """
+        rows = [
+            {
+                "id": "acct_a",
+                "labels": ["Account"],
+                "pagerank_score": 0.25,
+                "community_id": "ab12cd34ef56",
+                "created_at": 1_785_000_000_000,
+                "kyc_tier": None,
+                "risk_score": None,
+                "country": None,
+                "account_age": None,
+                "cumulative_volume": None,
+            },
+            # No id — a malformed node must be filtered out, not emitted.
+            {
+                "id": None,
+                "labels": ["Account"],
+                "pagerank_score": None,
+                "community_id": None,
+                "created_at": None,
+                "kyc_tier": None,
+                "risk_score": None,
+                "country": None,
+                "account_age": None,
+                "cumulative_volume": None,
+            },
+        ]
+
+        class FakeResult:
+            def __init__(self, records):
+                self._records = records
+
+            def __aiter__(self):
+                async def gen():
+                    for record in self._records:
+                        yield record
+
+                return gen()
+
+        class FakeSession:
+            def __init__(self, queries):
+                self.queries = queries
+
+            async def __aenter__(self):
+                return self
+
+            async def __aexit__(self, exc_type, exc, tb):
+                return False
+
+            async def run(self, query, **kwargs):
+                self.queries.append(query)
+                return FakeResult(rows)
+
+        class FakeDriver:
+            def __init__(self, session):
+                self._session = session
+
+            def session(self, database=None):
+                return self._session
+
+        queries = []
+        client = Neo4jClient()
+        client.driver = FakeDriver(FakeSession(queries))
+
+        result = await client.export_account_nodes()
+
+        assert len(result) == 1
+        assert result[0]["id"] == "acct_a"
+        assert result[0]["labels"] == ["Account"]
+        assert result[0]["pagerank_score"] == 0.25
+        assert result[0]["community_id"] == "ab12cd34ef56"
+        # Properties nothing populates yet still come back, as None.
+        assert result[0]["kyc_tier"] is None
+
+        text = queries[0].text if hasattr(queries[0], "text") else str(queries[0])
+        for node_type in ("Account", "Merchant", "Bank", "Exchange"):
+            assert node_type in text
+
+    @pytest.mark.asyncio
     async def test_compute_local_pagerank_uses_flows_to_edges(self):
         """PageRank should read the aggregated FLOWS_TO edge weights."""
         client = Neo4jClient()
@@ -184,7 +269,12 @@ class TestNeo4jClient:
 
         result = await client.compute_local_pagerank(["acct_a", "acct_b"])
 
-        assert result == {}
+        # No edges came back, but the requested accounts are still seeded into
+        # the adjacency map, so PageRank distributes mass uniformly over them
+        # rather than returning nothing. The old expectation of {} predated
+        # that seeding.
+        assert set(result) == {"acct_a", "acct_b"}
+        assert sum(result.values()) == pytest.approx(1.0, abs=1e-6)
         assert query_calls, "PageRank query should be executed"
         query, kwargs = query_calls[0]
         assert "FLOWS_TO" in query
