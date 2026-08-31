@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import { useState } from 'react';
 import { GraphCanvas } from './components/GraphCanvas';
 import { InspectorSidebar } from './components/InspectorSidebar';
 import { apiClient } from './services/api';

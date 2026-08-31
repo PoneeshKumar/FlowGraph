@@ -1,11 +1,11 @@
-import React, { useEffect, useRef } from 'react';
+import { useEffect, useRef } from 'react';
 import cytoscape from 'cytoscape';
 import coseBilkent from 'cytoscape-cose-bilkent';
 
 try {
   cytoscape.use(coseBilkent);
-} catch (e) {
-  // Prevent duplicate extension registration in HMR
+} catch {
+  // Prevent duplicate extension registration under HMR
 }
 
 export const GraphCanvas = ({ elements, onSelectNode }) => {
