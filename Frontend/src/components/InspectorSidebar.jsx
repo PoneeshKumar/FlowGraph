@@ -1,21 +1,32 @@
-import React, { useEffect, useState } from 'react';
+import { useEffect, useState } from 'react';
 import { apiClient } from '../services/api';
 
+// Enrichment is expensive (a Claude call) and, per the architecture, is meant
+// for elevated-risk / low-confidence cases — so it is fetched only for medium
+// tier and above, not on every node tap.
+const needsEnrichment = (node) => Boolean(node?.risk_tier) && node.risk_tier !== 'low';
+
 export const InspectorSidebar = ({ node, onClose }) => {
+  // The report is tagged with the account it belongs to, so a late response for
+  // a previously-selected node can never overwrite the current selection.
   const [report, setReport] = useState(null);
-  const [loading, setLoading] = useState(false);
 
   useEffect(() => {
-    if (!node) {
-      setReport(null);
-      return;
-    }
-    setLoading(true);
+    if (!needsEnrichment(node)) return;
+    let ignore = false;
     apiClient.getAIReport(node.id)
-      .then(setReport)
-      .catch((err) => console.error('Enrichment fetch failed:', err))
-      .finally(() => setLoading(false));
+      .then((data) => { if (!ignore) setReport({ accountId: node.id, data }); })
+      .catch((err) => {
+        if (ignore) return;
+        console.error('Enrichment fetch failed:', err);
+        setReport({ accountId: node.id, data: null });
+      });
+    return () => { ignore = true; };
   }, [node]);
+
+  const settledForNode = Boolean(report && node && report.accountId === node.id);
+  const currentReport = settledForNode ? report.data : null;
+  const loading = needsEnrichment(node) && !settledForNode;
 
   if (!node) return null;
 
@@ -72,27 +83,34 @@ export const InspectorSidebar = ({ node, onClose }) => {
             {loading && <span className="text-xs text-slate-400 animate-pulse">Evaluating graph...</span>}
           </div>
 
-          {report && !loading && (
+          {currentReport && (
             <div className="mt-3 bg-slate-950 rounded-lg p-4 border border-slate-800 space-y-3">
               <div>
                 <span className="text-xs text-slate-400">Detected Typology</span>
                 <p className="text-sm font-medium text-amber-300">
-                  {report.detected_typology || 'None detected'}
+                  {currentReport.detected_typology || 'None detected'}
                 </p>
               </div>
               <div>
                 <span className="text-xs text-slate-400">Reasoning</span>
                 <p className="text-xs text-slate-300 mt-1 leading-relaxed">
-                  {report.explanation}
+                  {currentReport.explanation}
                 </p>
               </div>
               <div className="pt-2 border-t border-slate-800">
                 <span className="text-xs text-slate-400">Regulatory Audit Trail</span>
                 <p className="text-xs font-mono text-slate-400 mt-1 bg-slate-900 p-2 rounded">
-                  {report.compliance_summary}
+                  {currentReport.compliance_summary}
                 </p>
               </div>
             </div>
+          )}
+
+          {!needsEnrichment(node) && (
+            <p className="mt-3 text-xs text-slate-500 leading-relaxed">
+              Automated AI enrichment runs for elevated-risk accounts
+              (medium tier and above).
+            </p>
           )}
         </div>
       </div>
