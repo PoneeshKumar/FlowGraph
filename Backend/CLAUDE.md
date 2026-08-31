@@ -46,6 +46,20 @@ Payment events → Kafka → Python consumer (Faust)
   writes its scores back as risk flags. Wiring it into the risk-flag aggregator
   is the main remaining integration task for this layer.
 
+**Pipeline visualiser (`/viz`) — built on branch `feature/community-visualiser`:**
+- A standalone, FastAPI-served viewer at `/viz` (`app/viz/`) that surfaces the
+  detection pipeline on the real graph. Five tabs (Cycle · PageRank · Louvain ·
+  GNN · Marked) rendered with vendored Cytoscape.js; community + account/hop
+  search; directed edges with thickness ∝ `FLOWS_TO.total_amount`. A **Run
+  pipeline** button launches the algos + GNN **inference** (no re-ingest, no
+  retrain) as an async background job and polls progress via a `pipeline_runs`
+  table. This is the first place the GNN's per-account scores are written back
+  (Neo4j `gnn_risk_score`) and aggregated into `risk_flags` (type `AGGREGATE`) —
+  the batch/on-demand counterpart to the still-unbuilt per-event live scoring.
+  Design + plans in `docs/superpowers/`. Running the app needs `POSTGRES_DSN`
+  pointed at the container (dev creds `flowgraph/changeme`) and a trained
+  `ml/runs/v10_L3` for the GNN stage.
+
 **Not started:**
 - AI enrichment layer (Claude explainability for low-confidence cases)
 - Query API (`shortest_path_between`, `subgraph_around`, `flow_between`)
