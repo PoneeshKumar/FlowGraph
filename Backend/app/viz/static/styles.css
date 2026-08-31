@@ -1,0 +1,33 @@
+:root { color-scheme: dark; }
+* { box-sizing: border-box; }
+body { margin: 0; height: 100vh; display: flex; flex-direction: column;
+       background: #0b1220; color: #e2e8f0; font: 14px system-ui, sans-serif; }
+
+#topbar { height: 52px; display: flex; align-items: center; gap: 16px; padding: 0 16px;
+          background: #0f172a; border-bottom: 1px solid #1e293b; }
+.brand { font-weight: 700; letter-spacing: 0.02em; }
+.search, .run { display: flex; align-items: center; gap: 8px; }
+.run { margin-left: auto; }
+
+#tabs { display: flex; gap: 4px; padding: 6px 12px; background: #0f172a; border-bottom: 1px solid #1e293b; }
+#tabs button { background: #1e293b; color: #94a3b8; border: 0; padding: 6px 14px;
+               border-radius: 6px; cursor: pointer; }
+#tabs button.active { background: #0ea5e9; color: #fff; }
+
+main { flex: 1; position: relative; display: flex; min-height: 0; }
+#cy { flex: 1; height: 100%; }
+#inspector { width: 320px; background: #0f172a; border-left: 1px solid #1e293b;
+             padding: 16px; overflow: auto; font-size: 13px; line-height: 1.7; }
+#inspector h3 { margin: 0 0 10px; font-size: 14px; word-break: break-all; }
+#inspector button { margin-top: 12px; }
+
+#progress { display: flex; align-items: center; gap: 8px; font-size: 12px; color: #94a3b8; }
+#progress-bar { width: 140px; height: 6px; background: #1e293b; border-radius: 3px; overflow: hidden; }
+#progress-bar::before { content: ""; display: block; height: 100%; width: var(--p, 0%);
+                        background: #0ea5e9; transition: width 0.3s; }
+
+input, select, button { background: #0b1220; color: #e2e8f0; border: 1px solid #334155;
+                        border-radius: 6px; padding: 5px 8px; font: inherit; }
+button { cursor: pointer; }
+button:disabled { opacity: 0.5; cursor: default; }
+#search-account { width: 200px; font-family: ui-monospace, monospace; }

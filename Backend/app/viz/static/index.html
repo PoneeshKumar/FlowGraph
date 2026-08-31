@@ -1,0 +1,41 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8"/>
+  <meta name="viewport" content="width=device-width, initial-scale=1"/>
+  <title>FlowGraph — Pipeline Visualiser</title>
+  <link rel="stylesheet" href="/viz/static/styles.css"/>
+</head>
+<body>
+  <header id="topbar">
+    <span class="brand">FlowGraph Pipeline</span>
+    <div class="search">
+      <select id="community-select"><option value="">— community —</option></select>
+      <input id="search-account" placeholder="account id…"/>
+      <select id="hops"><option>1</option><option selected>2</option><option>3</option><option>4</option></select>
+      <button id="explore-btn">Explore</button>
+    </div>
+    <div class="run">
+      <button id="run-btn">Run pipeline</button>
+      <div id="progress" hidden><div id="progress-bar"></div><span id="progress-label"></span></div>
+    </div>
+  </header>
+
+  <nav id="tabs">
+    <button data-tab="cycle" class="active">Cycle</button>
+    <button data-tab="pagerank">PageRank</button>
+    <button data-tab="louvain">Louvain</button>
+    <button data-tab="gnn">GNN</button>
+    <button data-tab="marked">Marked</button>
+  </nav>
+
+  <main>
+    <div id="cy"></div>
+    <aside id="inspector" hidden></aside>
+  </main>
+
+  <script src="/viz/static/vendor/cytoscape.min.js"></script>
+  <script src="/viz/static/viz-style.js"></script>
+  <script src="/viz/static/app.js"></script>
+</body>
+</html>
