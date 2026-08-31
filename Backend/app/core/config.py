@@ -20,6 +20,12 @@ class Settings(BaseSettings):
     # LLM API
     ANTHROPIC_API_KEY: str = ""
 
+    # --- Community visualiser (/viz) ---
+    GNN_RUN_DIR: str = "ml/runs/v10_L3"
+    GNN_ENSEMBLE_RUNS: List[str] = []
+    GNN_FEATURE_CACHE: str = "ml/cache/featureset_v4.npz"
+    MARK_GNN_THRESHOLD: float = 0.5
+
     class Config:
         env_file = ".env"
         case_sensitive = True
