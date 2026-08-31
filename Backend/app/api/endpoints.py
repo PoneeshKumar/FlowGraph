@@ -22,7 +22,7 @@ async def get_shortest_path(account_a: str = Query(...), account_b: str = Query(
 async def get_flow(
     account_a: str = Query(...),
     account_b: str = Query(...),
-    window: str = Query("7d", regex="^(1h|24h|7d|30d)$")
+    window: str = Query("7d", pattern="^(1h|24h|7d|30d)$")
 ):
     flow_data = await GraphService.get_flow_between(account_a, account_b, window)
     return FlowSummaryResponse(**flow_data)

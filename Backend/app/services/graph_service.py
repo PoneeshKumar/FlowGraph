@@ -1,5 +1,8 @@
 import time
 from typing import Dict, Any, List
+
+from neo4j.exceptions import ClientError
+
 from app.db.neo4j import neo4j_client
 from app.db.redis import get_redis
 from app.schemas.graph import GraphElements, NodeElement, NodeData, EdgeElement, EdgeData
@@ -24,21 +27,31 @@ class GraphService:
         YIELD nodes, relationships
         RETURN nodes, relationships
         """
-        # Fallback cypher if APOC is not installed
+        # Neo4j cannot parameterize a variable-length path bound (the `*1..N`),
+        # so `depth` is interpolated here — but only after being clamped to the
+        # same small integer range the API enforces, so it can never carry
+        # injection. Direction (outgoing) and the LIMIT mirror the primary APOC
+        # query so results don't depend on whether APOC is installed.
+        safe_depth = min(max(int(depth), 1), 4)
         fallback_query = """
-        MATCH path = (start:Account {id: $account_id})-[r:FLOWS_TO*1..%d]-(target:Account)
+        MATCH path = (start:Account {id: $account_id})-[r:FLOWS_TO*1..%d]->(target:Account)
         WITH nodes(path) AS ns, relationships(path) AS rs
+        LIMIT $limit
         UNWIND ns AS n
         UNWIND rs AS rel
         RETURN collect(DISTINCT n) AS nodes, collect(DISTINCT rel) AS relationships
-        """ % depth
+        """ % safe_depth
 
         async with neo4j_client.driver.session() as session:
             try:
                 result = await session.run(query, account_id=account_id, depth=depth, limit=limit)
                 record = await result.single()
-            except Exception:
-                result = await session.run(fallback_query, account_id=account_id)
+            except ClientError as exc:
+                # Only fall back when APOC is genuinely missing; a real query
+                # error must surface rather than be masked by the fallback.
+                if "ProcedureNotFound" not in (exc.code or ""):
+                    raise
+                result = await session.run(fallback_query, account_id=account_id, limit=limit)
                 record = await result.single()
 
             if not record or not record["nodes"]:

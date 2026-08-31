@@ -1,5 +1,6 @@
+from typing import List, Dict, Any, Optional
+
 from pydantic import BaseModel, Field
-import List, Dict, Any, Optional
 
 class NodeData(BaseModel):
     id: str

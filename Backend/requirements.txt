@@ -30,6 +30,11 @@ leidenalg==0.12.0
 # Web framework (included with Faust but explicit for clarity)
 aiohttp==3.10.1
 
+# FastAPI serving layer (graph query API — app/api)
+fastapi==0.115.0
+pydantic-settings==2.4.0
+uvicorn[standard]==0.30.6
+
 # Logging utilities
 python-json-logger==2.0.7
 
