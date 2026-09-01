@@ -1,8 +1,10 @@
 // Pure Cytoscape styling helpers for the pipeline visualiser.
-// UMD: attaches to window.VizStyle in the browser, exports for `node --test`.
+// Colors match the Frontend "Liquid Glass Ledger" system (light canvas, ink text,
+// mint accent, risk ladder). UMD: window.VizStyle in the browser, exports for node.
 (function (global) {
-  const PALETTE = ['#38bdf8', '#a78bfa', '#f472b6', '#34d399', '#fbbf24', '#fb7185',
-                   '#60a5fa', '#c084fc', '#4ade80', '#f59e0b', '#2dd4bf', '#e879f9'];
+  // Categorical palette for communities — mid-saturation, distinct on a light canvas.
+  const PALETTE = ['#4c6ef5', '#0d9d72', '#c46a10', '#9333ea', '#d83a30', '#0891b2',
+                   '#7c3aed', '#ca8a04', '#e11d48', '#059669', '#2563eb', '#db2777'];
   const clamp = (x, lo, hi) => Math.max(lo, Math.min(hi, x));
 
   function edgeWidth(w) { return clamp(Number(w) || 1, 1, 10); }
@@ -15,11 +17,12 @@
   }
 
   function gnnHeatColor(score) {
-    if (score === null || score === undefined) return '#475569';   // unscored → grey
+    if (score === null || score === undefined) return '#a4b0c4';   // unscored → ink-4 grey
     const s = clamp(Number(score), 0, 1);
-    const r = Math.round(56 + s * (239 - 56));     // green → red ramp
-    const g = Math.round(189 - s * (189 - 68));
-    const b = Math.round(120 - s * (120 - 68));
+    // Risk ladder ramp: low/mint #0d9d72 → critical/red #d83a30.
+    const r = Math.round(13 + s * (216 - 13));
+    const g = Math.round(157 - s * (157 - 58));
+    const b = Math.round(114 - s * (114 - 48));
     return '#' + [r, g, b].map(v => v.toString(16).padStart(2, '0')).join('');
   }
 
@@ -32,12 +35,14 @@
   function baseStyle() {
     return [
       { selector: 'node', style: {
-          'label': 'data(label)', 'font-size': 7, 'color': '#e2e8f0',
+          'label': 'data(label)', 'font-size': 7, 'color': '#131c2b',
+          'text-outline-color': '#fafbfc', 'text-outline-width': 1.4,
           'text-valign': 'center', 'text-halign': 'center',
-          'background-color': '#64748b', 'width': 26, 'height': 26 } },
+          'background-color': '#a4b0c4', 'width': 26, 'height': 26,
+          'border-width': 1, 'border-color': 'rgba(20,33,56,0.10)' } },
       { selector: 'edge', style: {
-          'width': 'data(weight)', 'line-color': '#334155',
-          'target-arrow-shape': 'triangle', 'target-arrow-color': '#334155',
+          'width': 'data(weight)', 'line-color': '#b2bccb', 'opacity': 0.9,
+          'target-arrow-shape': 'triangle', 'target-arrow-color': '#b2bccb',
           'curve-style': 'bezier', 'arrow-scale': 0.9 } },
     ];
   }
@@ -46,19 +51,20 @@
     const base = baseStyle();
     if (tab === 'cycle')
       return base.concat([{ selector: 'node[?in_cycle]',
-        style: { 'background-color': '#ef4444', 'width': 34, 'height': 34 } }]);
+        style: { 'background-color': '#d83a30', 'width': 34, 'height': 34,
+                 'border-color': '#a52a22' } }]);
     if (tab === 'pagerank')
       return base.concat([{ selector: 'node',
-        style: { 'width': 'data(_prSize)', 'height': 'data(_prSize)', 'background-color': '#38bdf8' } }]);
+        style: { 'width': 'data(_prSize)', 'height': 'data(_prSize)', 'background-color': '#4c6ef5' } }]);
     if (tab === 'louvain')
       return base.concat([{ selector: 'node', style: { 'background-color': 'data(_communityColor)' } }]);
     if (tab === 'gnn')
       return base.concat([{ selector: 'node', style: { 'background-color': 'data(_gnnColor)' } }]);
     if (tab === 'marked')
       return base.concat([
-        { selector: 'node', style: { 'opacity': 0.25 } },
+        { selector: 'node', style: { 'opacity': 0.22 } },
         { selector: 'node[?marked]',
-          style: { 'opacity': 1, 'border-width': 3, 'border-color': '#f43f5e' } }]);
+          style: { 'opacity': 1, 'border-width': 3, 'border-color': '#d83a30' } }]);
     return base;
   }
 
