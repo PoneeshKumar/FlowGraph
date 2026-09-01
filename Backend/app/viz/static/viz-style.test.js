@@ -18,15 +18,15 @@ test('gnnHeatColor: null is grey, low != high', () => {
   assert.notEqual(V.gnnHeatColor(0.1), V.gnnHeatColor(0.9));
 });
 
-test('pagerankSize maps into [18,60]', () => {
-  assert.equal(V.pagerankSize(5, 0, 10), 18 + 0.5 * (60 - 18));
-  assert.equal(V.pagerankSize(3, 3, 3), 30);   // degenerate range
+test('pagerankSize maps into a small range', () => {
+  assert.equal(V.pagerankSize(5, 0, 10), 10 + 0.5 * (34 - 10));   // 22
+  assert.equal(V.pagerankSize(3, 3, 3), 16);                      // degenerate range
 });
 
-test('baseStyle: directed arrow + data(weight) width', () => {
+test('baseStyle: directed arrow + weight-driven width', () => {
   const edge = V.baseStyle().find(s => s.selector === 'edge');
   assert.equal(edge.style['target-arrow-shape'], 'triangle');
-  assert.equal(edge.style['width'], 'data(weight)');
+  assert.match(edge.style['width'], /weight/);   // thickness scales with the amount
 });
 
 test('styleForTab returns a non-empty array per tab', () => {

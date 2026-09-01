@@ -1,10 +1,10 @@
 // Pure Cytoscape styling helpers for the pipeline visualiser.
-// Colors match the Frontend "Liquid Glass Ledger" system (light canvas, ink text,
-// mint accent, risk ladder). UMD: window.VizStyle in the browser, exports for node.
+// Mirrors the Frontend GraphExplorer aesthetic: small thin nodes, hairline
+// faint edges with tiny arrowheads, mono labels that auto-hide when zoomed out,
+// risk-ladder colors. UMD: window.VizStyle in the browser, exports for node.
 (function (global) {
-  // Categorical palette for communities — mid-saturation, distinct on a light canvas.
-  const PALETTE = ['#4c6ef5', '#0d9d72', '#c46a10', '#9333ea', '#d83a30', '#0891b2',
-                   '#7c3aed', '#ca8a04', '#e11d48', '#059669', '#2563eb', '#db2777'];
+  const PALETTE = ['#4c6ef5', '#0d9d72', '#c46a10', '#9333ea', '#0891b2', '#e11d48',
+                   '#7c3aed', '#ca8a04', '#059669', '#2563eb', '#db2777', '#0d9488'];
   const clamp = (x, lo, hi) => Math.max(lo, Math.min(hi, x));
 
   function edgeWidth(w) { return clamp(Number(w) || 1, 1, 10); }
@@ -17,7 +17,7 @@
   }
 
   function gnnHeatColor(score) {
-    if (score === null || score === undefined) return '#a4b0c4';   // unscored → ink-4 grey
+    if (score === null || score === undefined) return '#c3ccd8';   // unscored → faint grey
     const s = clamp(Number(score), 0, 1);
     // Risk ladder ramp: low/mint #0d9d72 → critical/red #d83a30.
     const r = Math.round(13 + s * (216 - 13));
@@ -27,23 +27,29 @@
   }
 
   function pagerankSize(score, min, max) {
-    if (max <= min) return 30;
+    if (max <= min) return 16;
     const t = clamp((Number(score) - min) / (max - min), 0, 1);
-    return 18 + t * (60 - 18);
+    return 10 + t * (34 - 10);   // small range — 10–34px
   }
 
   function baseStyle() {
     return [
       { selector: 'node', style: {
-          'label': 'data(label)', 'font-size': 7, 'color': '#131c2b',
-          'text-outline-color': '#fafbfc', 'text-outline-width': 1.4,
-          'text-valign': 'center', 'text-halign': 'center',
-          'background-color': '#a4b0c4', 'width': 26, 'height': 26,
-          'border-width': 1, 'border-color': 'rgba(20,33,56,0.10)' } },
+          'label': 'data(label)', 'font-size': 5.5, 'font-family': 'ui-monospace, monospace',
+          'color': '#8593a8', 'text-valign': 'bottom', 'text-margin-y': 2,
+          'text-outline-color': '#fafbfc', 'text-outline-width': 1,
+          'min-zoomed-font-size': 7,                       // labels fade in only when zoomed in
+          'background-color': '#dbe1ea', 'background-opacity': 1,
+          'border-width': 1, 'border-color': '#9aa6b8',
+          'width': 13, 'height': 13 } },
       { selector: 'edge', style: {
-          'width': 'data(weight)', 'line-color': '#b2bccb', 'opacity': 0.9,
-          'target-arrow-shape': 'triangle', 'target-arrow-color': '#b2bccb',
-          'curve-style': 'bezier', 'arrow-scale': 0.9 } },
+          'width': 'mapData(weight, 1, 10, 0.6, 2.2)',     // hairline → thin, ∝ amount
+          'line-color': 'rgba(20,33,56,0.16)',
+          'target-arrow-shape': 'triangle',
+          'target-arrow-color': 'rgba(20,33,56,0.24)', 'arrow-scale': 0.55,
+          'curve-style': 'bezier', 'opacity': 0.85 } },
+      { selector: 'node:selected', style: {
+          'border-width': 2, 'border-color': '#0d9d72', 'width': 18, 'height': 18 } },
     ];
   }
 
@@ -51,20 +57,24 @@
     const base = baseStyle();
     if (tab === 'cycle')
       return base.concat([{ selector: 'node[?in_cycle]',
-        style: { 'background-color': '#d83a30', 'width': 34, 'height': 34,
-                 'border-color': '#a52a22' } }]);
+        style: { 'background-color': '#d83a30', 'border-color': '#a52a22',
+                 'width': 17, 'height': 17 } }]);
     if (tab === 'pagerank')
       return base.concat([{ selector: 'node',
-        style: { 'width': 'data(_prSize)', 'height': 'data(_prSize)', 'background-color': '#4c6ef5' } }]);
+        style: { 'width': 'data(_prSize)', 'height': 'data(_prSize)',
+                 'background-color': '#4c6ef5', 'border-color': '#3b5bdb' } }]);
     if (tab === 'louvain')
-      return base.concat([{ selector: 'node', style: { 'background-color': 'data(_communityColor)' } }]);
+      return base.concat([{ selector: 'node',
+        style: { 'background-color': 'data(_communityColor)', 'border-color': 'rgba(20,33,56,0.18)' } }]);
     if (tab === 'gnn')
-      return base.concat([{ selector: 'node', style: { 'background-color': 'data(_gnnColor)' } }]);
+      return base.concat([{ selector: 'node',
+        style: { 'background-color': 'data(_gnnColor)', 'border-color': 'rgba(20,33,56,0.18)' } }]);
     if (tab === 'marked')
       return base.concat([
-        { selector: 'node', style: { 'opacity': 0.22 } },
+        { selector: 'node', style: { 'opacity': 0.2 } },
         { selector: 'node[?marked]',
-          style: { 'opacity': 1, 'border-width': 3, 'border-color': '#d83a30' } }]);
+          style: { 'opacity': 1, 'background-color': '#fff', 'border-width': 2.5,
+                   'border-color': '#d83a30', 'width': 15, 'height': 15 } }]);
     return base;
   }
 

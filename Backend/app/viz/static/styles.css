@@ -53,7 +53,12 @@ body {
 }
 
 main { flex: 1; position: relative; display: flex; min-height: 0; }
-#cy { flex: 1; height: 100%; background: transparent; }
+#cy {
+  flex: 1; height: 100%;
+  background-color: var(--bg);
+  background-image: radial-gradient(circle, rgba(20, 33, 56, 0.09) 1px, transparent 1px);
+  background-size: 26px 26px;
+}
 
 #inspector {
   width: 340px; padding: 20px; overflow: auto; font-size: 13px; line-height: 1.75;
