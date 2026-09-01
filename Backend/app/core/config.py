@@ -25,6 +25,7 @@ class Settings(BaseSettings):
     GNN_ENSEMBLE_RUNS: List[str] = []
     GNN_FEATURE_CACHE: str = "ml/cache/featureset_v4.npz"
     MARK_GNN_THRESHOLD: float = 0.5
+    CYCLE_MAX_SEEDS: int = 500
 
     class Config:
         env_file = ".env"

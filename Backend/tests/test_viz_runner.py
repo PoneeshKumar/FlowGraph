@@ -11,6 +11,7 @@ def _settings():
     s.GNN_ENSEMBLE_RUNS = []
     s.GNN_FEATURE_CACHE = "ml/cache/featureset_v4.npz"
     s.MARK_GNN_THRESHOLD = 0.5
+    s.CYCLE_MAX_SEEDS = 500
     return s
 
 
@@ -31,7 +32,9 @@ async def test_run_executes_all_stages_and_completes():
     with patch("app.viz.runner.CommunityDetector") as CD, \
          patch("app.viz.runner.CycleDetector") as CY, \
          patch("app.viz.runner.load_feature_cache", return_value=feature_set), \
-         patch("app.viz.runner.ensemble_scores", return_value=[0.9, 0.1]):
+         patch("app.viz.runner.ensemble_scores", return_value=[0.9, 0.1]), \
+         patch("pathlib.Path.exists", return_value=True), \
+         patch.object(PipelineRunner, "_cycle_seeds", AsyncMock(return_value=["a"])):
         CD.return_value.run = AsyncMock(return_value={"communities": 5})
         CY.return_value.detect = AsyncMock(return_value=[{"account_ids": ["a"]}])
         runner = PipelineRunner(neo4j, pg, _settings())
@@ -55,3 +58,22 @@ async def test_stage_failure_records_failed():
     last = pg.update_pipeline_run.await_args_list[-1].kwargs
     assert last["status"] == "failed"
     assert last["stage"] == "pagerank" and "boom" in last["error"]
+
+
+@pytest.mark.asyncio
+async def test_gnn_skips_gracefully_when_artifacts_missing():
+    neo4j = MagicMock(recompute_pagerank_full=AsyncMock(),
+                      write_gnn_scores=AsyncMock(), write_cycle_membership=AsyncMock())
+    pg = MagicMock(update_pipeline_run=AsyncMock(), upsert_risk_flag=AsyncMock())
+    with patch("app.viz.runner.CommunityDetector") as CD, \
+         patch("app.viz.runner.CycleDetector") as CY, \
+         patch("pathlib.Path.exists", return_value=False), \
+         patch.object(PipelineRunner, "_cycle_seeds", AsyncMock(return_value=["a"])):
+        CD.return_value.run = AsyncMock(return_value={})
+        CY.return_value.detect = AsyncMock(return_value=[{"account_ids": ["a"]}])
+        runner = PipelineRunner(neo4j, pg, _settings())
+        await runner.run("RID")
+    last = pg.update_pipeline_run.await_args_list[-1].kwargs
+    assert last["status"] == "completed"            # completes without the GNN
+    neo4j.write_gnn_scores.assert_not_awaited()      # GNN stage skipped
+    assert last["counts"]["marked"] == 1             # 'a' still marked via cycle signal
