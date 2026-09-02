@@ -89,25 +89,38 @@ _OVERVIEW_METRICS = {"pagerank": "pagerank_score", "gnn": "gnn_risk_score"}
 
 
 async def load_overview(session, *, metric: str = "pagerank", limit: int = 600):
-    """Whole-graph map: the induced subgraph on the top-``limit`` accounts.
+    """Whole-graph map: a *connected* backbone grown from the top accounts.
 
-    The full graph (~514k nodes / ~1M edges) cannot be drawn in a browser, so we
-    take the most important accounts by ``metric`` (PageRank or GNN risk) and every
-    ``FLOWS_TO`` between them — a legible backbone rather than a hairball. ``total``
-    in ``truncated`` is the real account count so the UI can show "N of 514,000".
+    The full graph (~514k nodes / ~1M edges) cannot be drawn in a browser. A naive
+    "top-N by metric, induced edges" view is nearly all singletons — the highest
+    PageRank accounts are self-transfer hubs with no counterparty in the set, so a
+    force layout packs the lone dots into a grid. Instead we take the top hubs that
+    *have* a real (non-self) counterparty, then pull in each one's strongest
+    counterparties, yielding connected flow clusters that spread across the canvas.
+    Self-loops are excluded throughout. ``total`` in ``truncated`` is the real
+    account count so the UI can show "N of 514,000".
     """
     prop = _OVERVIEW_METRICS.get(metric, "pagerank_score")
     limit = min(max(int(limit), 10), 2000)
-    # prop comes from the whitelist above (not user text) → safe to interpolate.
+    seeds = max(30, min(limit // 4, 400))   # hubs to grow from
+    fanout = 8                              # top counterparties pulled per hub
+    # prop is from the whitelist above (not user text) → safe to interpolate.
     query = (
         f"MATCH (a:Account) WHERE a.{prop} IS NOT NULL "
-        f"WITH a ORDER BY a.{prop} DESC LIMIT $limit "
-        "WITH collect(a) AS ns UNWIND ns AS a "
-        "OPTIONAL MATCH (a)-[r:FLOWS_TO]->(b:Account) WHERE b IN ns "
+        f"  AND EXISTS {{ MATCH (a)-[:FLOWS_TO]->(x:Account) WHERE x <> a }} "
+        f"WITH a ORDER BY a.{prop} DESC LIMIT $seeds "
+        "CALL (a) { "
+        "  MATCH (a)-[r:FLOWS_TO]->(b:Account) WHERE b <> a "
+        "  RETURN b ORDER BY r.total_amount DESC LIMIT $fanout "
+        "} "
+        "WITH collect(DISTINCT a) AS seed_ns, collect(DISTINCT b) AS nbr_ns "
+        "WITH (seed_ns + nbr_ns)[0..$limit] AS ns "
+        "UNWIND ns AS n "
+        "OPTIONAL MATCH (n)-[r:FLOWS_TO]->(m:Account) WHERE m IN ns AND m <> n "
         "RETURN ns AS nodes, collect(DISTINCT r) AS rels"
     )
     async with session() as s:
-        rec = await (await s.run(query, limit=limit)).single()
+        rec = await (await s.run(query, seeds=seeds, fanout=fanout, limit=limit)).single()
         total = (await (await s.run("MATCH (a:Account) RETURN count(a) AS n")).single())["n"]
     if not rec or not rec["nodes"]:
         return {"nodes": [], "edges": [], "truncated": {"shown": 0, "total": total}}

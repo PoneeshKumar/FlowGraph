@@ -6,7 +6,7 @@
 const V = window.VizStyle;
 let cy = null;
 const state = {
-  tab: 'pagerank',
+  tab: 'gnn',                       // GNN is the primary classifier + best-connected view
   view: 'overview',                 // 'overview' | 'subgraph'
   elements: { nodes: [], edges: [] },
   total: null,                      // full account count, for the "N of M" readout
@@ -33,11 +33,16 @@ function decorate(elements) {
 }
 
 function layoutFor(n) {
-  if (n <= 650)
-    return { name: 'cose', animate: false, padding: 40, nodeRepulsion: 12000,
-             idealEdgeLength: 65, gravity: 0.35, numIter: 1000, componentSpacing: 90 };
-  // Large graph: force layout is too slow — arrange in importance rings instead.
-  return { name: 'concentric', animate: false, padding: 40, minNodeSpacing: 8,
+  if (n <= 800)
+    // Strong repulsion + wide component spacing so the many small flow clusters
+    // spread across the whole canvas instead of packing into a tight block.
+    // randomize avoids the grid-like initial seeding; fewer iterations keeps it snappy.
+    return { name: 'cose', animate: false, randomize: true, padding: 60,
+             nodeRepulsion: 220000, idealEdgeLength: 85, edgeElasticity: 120,
+             gravity: 0.18, numIter: 500, componentSpacing: 200,
+             coolingFactor: 0.95, initialTemp: 220 };
+  // Very large graph: force layout is too slow — arrange in importance rings.
+  return { name: 'concentric', animate: false, padding: 40, minNodeSpacing: 10,
            concentric: (ele) => ele.data('_prSize') || 1, levelWidth: () => 6 };
 }
 
