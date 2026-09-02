@@ -1,9 +1,18 @@
 // FlowGraph pipeline visualiser — viewer logic.
-// Consumes the /viz API; renders subgraphs with Cytoscape. Tab switches only
-// re-style the loaded elements; clicking a node re-centres on its neighbourhood.
+// Opens on a whole-graph Overview (top-N accounts by importance). Tabs re-colour
+// the loaded elements without refetching; community / account search drills into
+// a subgraph. Labels auto-hide on big graphs, layout switches to a fast one when
+// the node count is high, and hover highlights a node's flows.
 const V = window.VizStyle;
 let cy = null;
-const state = { tab: 'cycle', elements: { nodes: [], edges: [] } };
+const state = {
+  tab: 'pagerank',
+  view: 'overview',                 // 'overview' | 'subgraph'
+  elements: { nodes: [], edges: [] },
+  total: null,                      // full account count, for the "N of M" readout
+};
+
+const $ = (id) => document.getElementById(id);
 
 async function getJSON(url, opts) {
   const r = await fetch(url, opts);
@@ -23,65 +32,131 @@ function decorate(elements) {
   return elements;
 }
 
-function render(elements) {
-  state.elements = decorate(elements);
-  if (cy) cy.destroy();
-  cy = cytoscape({
-    container: document.getElementById('cy'),
-    elements: state.elements,
-    style: V.styleForTab(state.tab),
-    layout: { name: 'cose', animate: false, nodeRepulsion: 8000, padding: 30 },
-  });
-  cy.on('tap', 'node', (e) => onNodeTap(e.target));
+function layoutFor(n) {
+  if (n <= 650)
+    return { name: 'cose', animate: false, padding: 40, nodeRepulsion: 12000,
+             idealEdgeLength: 65, gravity: 0.35, numIter: 1000, componentSpacing: 90 };
+  // Large graph: force layout is too slow — arrange in importance rings instead.
+  return { name: 'concentric', animate: false, padding: 40, minNodeSpacing: 8,
+           concentric: (ele) => ele.data('_prSize') || 1, levelWidth: () => 6 };
 }
 
-function showSummary(elements) {
-  const panel = document.getElementById('inspector');
-  panel.hidden = false;
-  panel.innerHTML = `<h3>Subgraph</h3>
-    <div>${elements.nodes.length} nodes · ${elements.edges.length} edges</div>
-    <div style="color:#64748b">click a node for details</div>`;
+function render(elements) {
+  state.elements = decorate(elements);
+  const n = elements.nodes.length;
+  const labels = n <= V.LABEL_LIMIT;
+  $('loading').hidden = false;
+  if (cy) cy.destroy();
+  cy = cytoscape({
+    container: $('cy'),
+    elements: state.elements,
+    style: V.styleForTab(state.tab, { labels }),
+    layout: layoutFor(n),
+  });
+  cy.one('layoutstop', () => { $('loading').hidden = true; cy.fit(undefined, 30); });
+  cy.on('tap', 'node', (e) => onNodeTap(e.target));
+  wireHover(cy);
+  renderLegend();
+  renderReadout(elements);
+}
+
+function wireHover(cy) {
+  if (cy.nodes().length > 800) return;    // skip on huge graphs — too costly per move
+  cy.on('mouseover', 'node', (e) => {
+    const n = e.target;
+    cy.elements().addClass('faded');
+    n.closedNeighborhood().removeClass('faded');
+    n.addClass('hl'); n.connectedEdges().addClass('hl');
+  });
+  cy.on('mouseout', 'node', () => cy.elements().removeClass('faded hl'));
+}
+
+function renderReadout(elements) {
+  const box = $('count-readout');
+  const nN = elements.nodes.length, eN = elements.edges.length;
+  const t = elements.truncated || {};
+  if (state.view === 'overview' && t.total) {
+    box.innerHTML = `<b>${nN.toLocaleString()}</b> of ${t.total.toLocaleString()} accounts`
+      + ` · <b>${eN.toLocaleString()}</b> flows`
+      + `<span class="hint">top hubs — full graph too large to draw</span>`;
+  } else {
+    box.innerHTML = `<b>${nN}</b> nodes · <b>${eN}</b> flows`;
+  }
+  box.hidden = false;
+}
+
+function renderLegend() {
+  const el = $('legend');
+  const lg = V.legendFor(state.tab);
+  const swatch = (s) => {
+    if (s === 'grad-risk') return `<i class="sw grad-risk"></i>`;
+    if (s === 'grad-comm') return `<i class="sw grad-comm"></i>`;
+    if (s === 'ring-red') return `<i class="sw ring-red"></i>`;
+    return `<i class="sw" style="background:${s}"></i>`;
+  };
+  el.innerHTML = `<div class="lg-title">${lg.title}</div>`
+    + lg.items.map(it => `<div class="lg-row">${swatch(it.swatch)}<span>${it.label}</span></div>`).join('');
+  el.hidden = false;
+}
+
+async function loadOverview() {
+  try {
+    $('loading').hidden = false;
+    const metric = (state.tab === 'gnn' || state.tab === 'marked') ? 'gnn' : 'pagerank';
+    const cap = $('node-cap').value;
+    const data = await getJSON(`/viz/overview?metric=${metric}&limit=${cap}`);
+    state.view = 'overview';
+    if (!data.nodes || !data.nodes.length) { $('loading').hidden = true; return; }
+    render(data);
+  } catch (err) { $('loading').hidden = true; alert(`Overview failed: ${err.message}`); }
 }
 
 async function loadSubgraph(params) {
   try {
+    $('loading').hidden = false;
     const qs = new URLSearchParams(params).toString();
     const data = await getJSON(`/viz/subgraph?${qs}`);
-    if (!data.nodes || !data.nodes.length) { alert('No nodes for that selection.'); return; }
+    state.view = 'subgraph';
+    if (!data.nodes || !data.nodes.length) { $('loading').hidden = true; alert('No nodes for that selection.'); return; }
     render(data);
-    showSummary(data);
-  } catch (err) { alert(`Load failed: ${err.message}`); }
+  } catch (err) { $('loading').hidden = true; alert(`Load failed: ${err.message}`); }
 }
 
 function setTab(tab) {
   state.tab = tab;
   document.querySelectorAll('#tabs button').forEach(b =>
     b.classList.toggle('active', b.dataset.tab === tab));
-  if (cy) cy.style(V.styleForTab(tab));   // re-style same elements, no refetch
+  renderLegend();
+  if (cy) {
+    const labels = cy.nodes().length <= V.LABEL_LIMIT;
+    cy.style(V.styleForTab(tab, { labels }));   // re-style same elements, no refetch
+  }
 }
 
 function onNodeTap(node) {
   const d = node.data();
-  const panel = document.getElementById('inspector');
+  const panel = $('inspector');
   panel.hidden = false;
   const fmt = (v) => (v === null || v === undefined ? '—' : v);
+  const risk = (d.gnn_risk_score === null || d.gnn_risk_score === undefined)
+    ? '—' : Number(d.gnn_risk_score).toFixed(3);
   panel.innerHTML = `<h3>${fmt(d.label) || d.id}</h3>
     <div>id: <code>${d.id}</code></div>
     <div>type: ${fmt(d.node_type)}</div>
     <div>pagerank: ${(d.pagerank_score || 0).toExponential(2)}</div>
-    <div>community: ${fmt(d.community_id)}</div>
-    <div>GNN risk: ${fmt(d.gnn_risk_score)} (${fmt(d.gnn_risk_tier)})</div>
+    <div>community: <code>${fmt(d.community_id)}</code></div>
+    <div>GNN risk: ${risk} (${fmt(d.gnn_risk_tier)})</div>
     <div>in cycle: ${!!d.in_cycle}</div>
     <div>marked: ${!!d.marked}</div>
-    <button id="recenter">Re-center here</button>`;
-  document.getElementById('recenter').onclick = () =>
-    loadSubgraph({ account_id: d.id, hops: document.getElementById('hops').value });
+    <button id="recenter">Explore neighbourhood</button>`;
+  $('recenter').onclick = () =>
+    loadSubgraph({ account_id: d.id, hops: $('hops').value });
 }
 
 async function populateCommunities() {
   try {
     const rows = await getJSON('/viz/communities?sort=risk&limit=100');
-    const sel = document.getElementById('community-select');
+    const sel = $('community-select');
     sel.length = 1;   // keep the placeholder option
     for (const r of rows) {
       const o = document.createElement('option');
@@ -93,9 +168,7 @@ async function populateCommunities() {
 }
 
 async function pollRun(runId) {
-  const box = document.getElementById('progress');
-  const bar = document.getElementById('progress-bar');
-  const label = document.getElementById('progress-label');
+  const box = $('progress'), bar = $('progress-bar'), label = $('progress-label');
   box.hidden = false;
   const timer = setInterval(async () => {
     let s;
@@ -104,29 +177,32 @@ async function pollRun(runId) {
     label.textContent = `${s.status}${s.stage ? ' · ' + s.stage : ''}`;
     if (s.status === 'completed' || s.status === 'failed') {
       clearInterval(timer);
-      document.getElementById('run-btn').disabled = false;
+      $('run-btn').disabled = false;
       if (s.status === 'failed') label.textContent = `failed at ${s.stage}: ${s.error}`;
-      else { label.textContent = 'done'; populateCommunities(); }
+      else { label.textContent = 'done'; populateCommunities(); loadOverview(); }
     }
   }, 1500);
 }
 
 function wireEvents() {
-  document.getElementById('tabs').addEventListener('click', (e) => {
+  $('tabs').addEventListener('click', (e) => {
     if (e.target.dataset.tab) setTab(e.target.dataset.tab);
   });
-  document.getElementById('community-select').addEventListener('change', (e) => {
+  $('overview-btn').addEventListener('click', loadOverview);
+  $('node-cap').addEventListener('input', (e) => { $('node-cap-val').textContent = e.target.value; });
+  $('node-cap').addEventListener('change', () => { if (state.view === 'overview') loadOverview(); });
+  $('community-select').addEventListener('change', (e) => {
     if (e.target.value) loadSubgraph({ community_id: e.target.value });
   });
-  document.getElementById('explore-btn').addEventListener('click', () => {
-    const acct = document.getElementById('search-account').value.trim();
-    if (acct) loadSubgraph({ account_id: acct, hops: document.getElementById('hops').value });
+  $('explore-btn').addEventListener('click', () => {
+    const acct = $('search-account').value.trim();
+    if (acct) loadSubgraph({ account_id: acct, hops: $('hops').value });
   });
-  document.getElementById('search-account').addEventListener('keydown', (e) => {
-    if (e.key === 'Enter') document.getElementById('explore-btn').click();
+  $('search-account').addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') $('explore-btn').click();
   });
-  document.getElementById('run-btn').addEventListener('click', async () => {
-    const btn = document.getElementById('run-btn');
+  $('run-btn').addEventListener('click', async () => {
+    const btn = $('run-btn');
     btn.disabled = true;
     try {
       const { run_id } = await getJSON('/viz/run', { method: 'POST' });
@@ -137,3 +213,4 @@ function wireEvents() {
 
 wireEvents();
 populateCommunities();
+loadOverview();     // open on the whole-graph map, not a blank canvas

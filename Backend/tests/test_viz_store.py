@@ -106,6 +106,20 @@ def test_load_subgraph_account_cycle():
     assert ab["data"]["weight"] == 2.5                       # 250000 → thickest
 
 
+def test_load_overview_induced_subgraph():
+    async def fn(factory):
+        # High pagerank on the seeded trio → they rank into the top-N overview,
+        # and every FLOWS_TO among them comes back as an induced edge.
+        return await store.load_overview(factory, metric="pagerank", limit=2000)
+    out = _run_neo4j(fn)
+    ids = {n["data"]["id"] for n in out["nodes"]}
+    assert {"vt_a", "vt_b", "vt_c"} <= ids
+    edges = {(e["data"]["source"], e["data"]["target"]) for e in out["edges"]}
+    assert ("vt_a", "vt_b") in edges and ("vt_c", "vt_a") in edges
+    assert out["truncated"]["total"] >= 3                    # real account count
+    assert out["truncated"]["shown"] == len(out["nodes"])
+
+
 def test_list_communities_top_is_seeded():
     async def fn(factory):
         return await store.list_communities(factory, sort="risk", limit=5)

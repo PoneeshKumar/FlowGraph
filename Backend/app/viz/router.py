@@ -32,6 +32,12 @@ async def communities(sort: str = "risk", limit: int = Query(100, le=200), offse
     return await store.list_communities(_session(), sort, limit, offset)
 
 
+@router.get("/overview")
+async def overview(metric: str = "pagerank", limit: int = Query(600, ge=10, le=2000)):
+    """Whole-graph map — induced subgraph on the top-``limit`` accounts by metric."""
+    return await store.load_overview(_session(), metric=metric, limit=limit)
+
+
 @router.get("/subgraph")
 async def subgraph(
     community_id: Optional[str] = None,

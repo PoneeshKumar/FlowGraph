@@ -28,6 +28,22 @@ def test_communities_endpoint(client):
     assert r.status_code == 200 and r.json()[0]["community_id"] == "c1"
 
 
+def test_overview_calls_store(client):
+    from app.viz import store
+    payload = {"nodes": [{"data": {"id": "h1"}}], "edges": [],
+               "truncated": {"shown": 1, "total": 514000}}
+    with patch.object(store, "load_overview", AsyncMock(return_value=payload)) as m:
+        r = client.get("/viz/overview?metric=gnn&limit=300")
+    assert r.status_code == 200 and r.json()["truncated"]["total"] == 514000
+    assert m.await_args.kwargs["metric"] == "gnn" and m.await_args.kwargs["limit"] == 300
+
+
+def test_overview_limit_is_bounded(client):
+    # limit is capped at 2000 by the route's Query(le=2000) validator.
+    r = client.get("/viz/overview?limit=99999")
+    assert r.status_code == 422
+
+
 def test_subgraph_requires_a_selector(client):
     r = client.get("/viz/subgraph")
     assert r.status_code == 422

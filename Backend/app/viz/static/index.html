@@ -9,8 +9,14 @@
 <body>
   <header id="topbar">
     <span class="brand">FlowGraph Pipeline</span>
-    <div class="search">
-      <select id="community-select"><option value="">— community —</option></select>
+    <div class="controls">
+      <button id="overview-btn" class="primary">Whole graph</button>
+      <label class="rng">nodes
+        <input id="node-cap" type="range" min="100" max="2000" step="100" value="600"/>
+        <span id="node-cap-val">600</span>
+      </label>
+      <span class="sep"></span>
+      <select id="community-select"><option value="">community…</option></select>
       <input id="search-account" placeholder="account id…"/>
       <select id="hops"><option>1</option><option selected>2</option><option>3</option><option>4</option></select>
       <button id="explore-btn">Explore</button>
@@ -22,15 +28,18 @@
   </header>
 
   <nav id="tabs">
-    <button data-tab="cycle" class="active">Cycle</button>
-    <button data-tab="pagerank">PageRank</button>
+    <button data-tab="pagerank" class="active">PageRank</button>
     <button data-tab="louvain">Louvain</button>
     <button data-tab="gnn">GNN</button>
+    <button data-tab="cycle">Cycle</button>
     <button data-tab="marked">Marked</button>
   </nav>
 
   <main>
     <div id="cy"></div>
+    <div id="count-readout" hidden></div>
+    <div id="legend" hidden></div>
+    <div id="loading" hidden>laying out graph…</div>
     <aside id="inspector" hidden></aside>
   </main>
 

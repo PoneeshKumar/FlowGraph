@@ -66,6 +66,56 @@ def shape_elements(nodes: List[dict], rels: List[dict]) -> Dict[str, Any]:
             "truncated": {"shown": len(out_n), "total": len(out_n)}}
 
 
+def _shape_record(rec) -> Dict[str, Any]:
+    """Turn a ``{nodes, rels}`` Neo4j record into Cytoscape elements.
+
+    Shared by ``load_subgraph`` and ``load_overview``: unpacks node/relationship
+    objects, derives ``source``/``target`` from the relationship endpoints, and
+    sets the ``marked`` flag (in a cycle, or GNN risk ≥ 0.5).
+    """
+    nodes = [dict(n) for n in rec["nodes"]]
+    rels = []
+    for r in rec["rels"]:
+        if r is None:
+            continue
+        rels.append({"source": r.start_node["id"], "target": r.end_node["id"], **dict(r)})
+    for n in nodes:
+        n["marked"] = bool(n.get("in_cycle")) or float(n.get("gnn_risk_score") or 0.0) >= 0.5
+    return shape_elements(nodes, rels)
+
+
+# Property a whitelist maps to — never interpolate a raw metric name into Cypher.
+_OVERVIEW_METRICS = {"pagerank": "pagerank_score", "gnn": "gnn_risk_score"}
+
+
+async def load_overview(session, *, metric: str = "pagerank", limit: int = 600):
+    """Whole-graph map: the induced subgraph on the top-``limit`` accounts.
+
+    The full graph (~514k nodes / ~1M edges) cannot be drawn in a browser, so we
+    take the most important accounts by ``metric`` (PageRank or GNN risk) and every
+    ``FLOWS_TO`` between them — a legible backbone rather than a hairball. ``total``
+    in ``truncated`` is the real account count so the UI can show "N of 514,000".
+    """
+    prop = _OVERVIEW_METRICS.get(metric, "pagerank_score")
+    limit = min(max(int(limit), 10), 2000)
+    # prop comes from the whitelist above (not user text) → safe to interpolate.
+    query = (
+        f"MATCH (a:Account) WHERE a.{prop} IS NOT NULL "
+        f"WITH a ORDER BY a.{prop} DESC LIMIT $limit "
+        "WITH collect(a) AS ns UNWIND ns AS a "
+        "OPTIONAL MATCH (a)-[r:FLOWS_TO]->(b:Account) WHERE b IN ns "
+        "RETURN ns AS nodes, collect(DISTINCT r) AS rels"
+    )
+    async with session() as s:
+        rec = await (await s.run(query, limit=limit)).single()
+        total = (await (await s.run("MATCH (a:Account) RETURN count(a) AS n")).single())["n"]
+    if not rec or not rec["nodes"]:
+        return {"nodes": [], "edges": [], "truncated": {"shown": 0, "total": total}}
+    out = _shape_record(rec)
+    out["truncated"] = {"shown": len(out["nodes"]), "total": total}
+    return out
+
+
 async def list_communities(session, sort: str = "risk", limit: int = 100, offset: int = 0):
     order = "risk_score DESC" if sort == "risk" else "size DESC"
     query = (
@@ -112,16 +162,7 @@ async def load_subgraph(session, *, community_id: Optional[str] = None,
         rec = await (await s.run(query, **params)).single()
     if not rec or not rec["nodes"]:
         return {"nodes": [], "edges": [], "truncated": {"shown": 0, "total": 0}}
-
-    nodes = [dict(n) for n in rec["nodes"]]
-    rels = []
-    for r in rec["rels"]:
-        if r is None:
-            continue
-        rels.append({"source": r.start_node["id"], "target": r.end_node["id"], **dict(r)})
-    for n in nodes:
-        n["marked"] = bool(n.get("in_cycle")) or float(n.get("gnn_risk_score") or 0.0) >= 0.5
-    return shape_elements(nodes, rels)
+    return _shape_record(rec)
 
 
 async def list_marked(pg, sort: str = "score", signal: Optional[str] = None,
