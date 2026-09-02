@@ -216,6 +216,20 @@ class TestCycleDetector:
         }
 
     @pytest.mark.asyncio
+    async def test_detect_forwards_window_hours(self, mock_neo4j_client, mock_postgres_client):
+        """A batch sweep passes window_hours through to find_cycles; the default
+        (None) leaves find_cycles on its own CYCLE_WINDOW_HOURS default."""
+        mock_neo4j_client.find_cycles = AsyncMock(return_value=[])
+        detector = CycleDetector(mock_neo4j_client, mock_postgres_client)
+
+        await detector.detect("A", window_hours=35107)
+        assert mock_neo4j_client.find_cycles.await_args.kwargs["window_hours"] == 35107
+
+        mock_neo4j_client.find_cycles.reset_mock()
+        await detector.detect("A")
+        assert "window_hours" not in mock_neo4j_client.find_cycles.await_args.kwargs
+
+    @pytest.mark.asyncio
     async def test_detect_persists_flag(self, mock_neo4j_client, mock_postgres_client):
         """A valid cycle triggers exactly one upsert_risk_flag call."""
         raw = self._make_raw_cycle()

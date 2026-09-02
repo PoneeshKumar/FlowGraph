@@ -34,6 +34,7 @@ async def test_run_executes_all_stages_and_completes():
          patch("app.viz.runner.load_feature_cache", return_value=feature_set), \
          patch("app.viz.runner.ensemble_scores", return_value=[0.9, 0.1]), \
          patch("pathlib.Path.exists", return_value=True), \
+         patch.object(PipelineRunner, "_cycle_window", AsyncMock(return_value=(None, None))), \
          patch.object(PipelineRunner, "_cycle_seeds", AsyncMock(return_value=["a"])):
         CD.return_value.run = AsyncMock(return_value={"communities": 5})
         CY.return_value.detect = AsyncMock(return_value=[{"account_ids": ["a"]}])
@@ -47,6 +48,55 @@ async def test_run_executes_all_stages_and_completes():
     neo4j.write_gnn_scores.assert_awaited_once()
     neo4j.write_cycle_membership.assert_awaited_once()
     pg.upsert_risk_flag.assert_awaited_once()      # only the marked account
+
+
+@pytest.mark.asyncio
+async def test_cycle_forwards_anchored_window_to_detector():
+    # The data-anchored window (ref, hours) must reach detect() — otherwise the
+    # default "last 48h from now" excludes every edge in the historical dataset.
+    from datetime import datetime, timezone
+    ref = datetime(2026, 8, 30, tzinfo=timezone.utc)
+    neo4j = MagicMock(write_cycle_membership=AsyncMock(return_value=2))
+    pg = MagicMock(update_pipeline_run=AsyncMock())
+    with patch("app.viz.runner.CycleDetector") as CY, \
+         patch.object(PipelineRunner, "_cycle_window", AsyncMock(return_value=(ref, 35107))), \
+         patch.object(PipelineRunner, "_cycle_seeds", AsyncMock(return_value=["s1"])):
+        CY.return_value.detect = AsyncMock(return_value=[{"account_ids": ["s1", "s2"]}])
+        runner = PipelineRunner(neo4j, pg, _settings())
+        members = await runner._cycle("RID")
+    CY.return_value.detect.assert_awaited_once_with(
+        "s1", reference_time=ref, window_hours=35107)
+    assert members == {"s1", "s2"}
+    neo4j.write_cycle_membership.assert_awaited_once_with({"s1", "s2"})
+
+
+@pytest.mark.asyncio
+async def test_cycle_window_anchors_just_past_newest_edge():
+    # min last_ts and max last_ts an hour apart → window spans that hour + 48h margin,
+    # anchored one hour past the newest edge.
+    mn, mx = 1_000_000, 1_003_600            # 3600s = 1h apart
+    session = MagicMock()
+    session.run = AsyncMock(return_value=MagicMock(
+        single=AsyncMock(return_value={"mn": mn, "mx": mx})))
+    cm = MagicMock(__aenter__=AsyncMock(return_value=session), __aexit__=AsyncMock())
+    neo4j = MagicMock()
+    neo4j.driver.session = MagicMock(return_value=cm)
+    runner = PipelineRunner(neo4j, MagicMock(), _settings())
+    ref, hours = await runner._cycle_window()
+    assert int(ref.timestamp()) == mx + 3600     # just past the newest edge
+    assert hours == (mx - mn) // 3600 + 48        # 1 + 48
+
+
+@pytest.mark.asyncio
+async def test_cycle_window_none_when_no_timestamps():
+    session = MagicMock()
+    session.run = AsyncMock(return_value=MagicMock(
+        single=AsyncMock(return_value={"mn": None, "mx": None})))
+    cm = MagicMock(__aenter__=AsyncMock(return_value=session), __aexit__=AsyncMock())
+    neo4j = MagicMock()
+    neo4j.driver.session = MagicMock(return_value=cm)
+    runner = PipelineRunner(neo4j, MagicMock(), _settings())
+    assert await runner._cycle_window() == (None, None)
 
 
 @pytest.mark.asyncio
@@ -68,6 +118,7 @@ async def test_gnn_skips_gracefully_when_artifacts_missing():
     with patch("app.viz.runner.CommunityDetector") as CD, \
          patch("app.viz.runner.CycleDetector") as CY, \
          patch("pathlib.Path.exists", return_value=False), \
+         patch.object(PipelineRunner, "_cycle_window", AsyncMock(return_value=(None, None))), \
          patch.object(PipelineRunner, "_cycle_seeds", AsyncMock(return_value=["a"])):
         CD.return_value.run = AsyncMock(return_value={})
         CY.return_value.detect = AsyncMock(return_value=[{"account_ids": ["a"]}])

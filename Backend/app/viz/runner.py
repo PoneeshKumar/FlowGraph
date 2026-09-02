@@ -6,6 +6,7 @@ re-ingests transactions or retrains the GNN. Each stage is isolated so a failure
 records which stage failed and stops.
 """
 import logging
+from datetime import datetime, timezone
 from pathlib import Path
 
 from config import NEO4J_DATABASE
@@ -59,22 +60,46 @@ class PipelineRunner:
 
     async def _cycle(self, run_id):
         await self._mark(run_id, "cycle", 0.5)
+        ref, window_hours = await self._cycle_window()
         seeds = await self._cycle_seeds()
         detector = CycleDetector(self.neo4j, self.pg)
         members = set()
         for account_id in seeds:
-            for flag in await detector.detect(account_id):
+            for flag in await detector.detect(
+                    account_id, reference_time=ref, window_hours=window_hours):
                 members.update(flag.get("account_ids", []))
         await self.neo4j.write_cycle_membership(members)
         return members
 
+    async def _cycle_window(self):
+        # The look-back window is anchored to the DATA, not wall-clock now. This is a
+        # batch sweep over a historical dataset (the IBM AML graph spans years), so
+        # find_cycles' default "last 48h from now" filter excludes every edge and
+        # finds nothing. We anchor the reference time just past the newest edge and
+        # widen the window to span the full history (CLAUDE.md: batch/investigative
+        # sweeps use a wider window). Returns (reference_time, window_hours); (None,
+        # None) when there are no timestamped edges, so the detector keeps its default.
+        query = ("MATCH (:Account)-[f:FLOWS_TO]->(:Account) "
+                 "RETURN min(f.last_ts) AS mn, max(f.last_ts) AS mx")
+        async with self.neo4j.driver.session(database=NEO4J_DATABASE) as session:
+            rec = await (await session.run(query)).single()
+        if not rec or rec["mn"] is None or rec["mx"] is None:
+            return None, None
+        mn, mx = int(rec["mn"]), int(rec["mx"])
+        ref = datetime.fromtimestamp(mx + 3600, tz=timezone.utc)   # just past newest edge
+        window_hours = (mx - mn) // 3600 + 48                       # full span + margin
+        return ref, window_hours
+
     async def _cycle_seeds(self):
-        # CycleDetector.detect is per-account (a bounded DFS seeded from one node);
-        # a full 513k-account sweep is impractical on-demand, so seed from a capped
-        # set of accounts that have outgoing flow — the only cycle candidates.
-        # CYCLE_MAX_SEEDS bounds the work. (The GNN already covers cycle typologies;
-        # this stage is illustrative, not exhaustive.)
-        query = "MATCH (a:Account)-[:FLOWS_TO]->() RETURN DISTINCT a.id AS id LIMIT $limit"
+        # CycleDetector.detect is per-account (a bounded DFS seeded from one node), so
+        # a full 513k-account sweep is impractical on-demand — seed selection decides
+        # what gets found. Members of a reciprocal pair (a→b→a) are guaranteed to sit
+        # on a 2-cycle, so they are by far the highest-yield seeds; an arbitrary "has
+        # outgoing flow" sample almost never lands on a ring. CYCLE_MAX_SEEDS bounds
+        # the work. (The GNN already covers cycle typologies; this stage is
+        # illustrative of the detector, not exhaustive.)
+        query = ("MATCH (a:Account)-[:FLOWS_TO]->(b:Account)-[:FLOWS_TO]->(a) "
+                 "WHERE a.id < b.id RETURN a.id AS id LIMIT $limit")
         async with self.neo4j.driver.session(database=NEO4J_DATABASE) as session:
             res = await session.run(query, limit=self.s.CYCLE_MAX_SEEDS)
             return [r["id"] async for r in res]
