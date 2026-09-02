@@ -88,15 +88,22 @@ function renderReadout(elements) {
   } else {
     head = `<b>${nN}</b> nodes · <b>${eN}</b> flows`;
   }
-  // On the comparison tabs, quantify the agreement in the current view.
-  if (['marked', 'dataset', 'confirmed'].includes(state.tab)) {
+  // On the comparison tabs, quantify agreement in the current view.
+  if (['marked', 'dataset', 'confirmed', 'compare'].includes(state.tab)) {
     const ns = elements.nodes;
     const ours = ns.filter(n => n.data.marked).length;
     const truth = ns.filter(n => n.data.truth).length;
-    const agree = ns.filter(n => n.data.marked && n.data.truth).length;
-    head += `<span class="hint">ours <b>${ours}</b> · dataset <b>${truth}</b> · `
-      + `agree <b style="color:#0a8761">${agree}</b>`
-      + (truth ? ` · caught ${Math.round(100 * agree / truth)}%` : '') + `</span>`;
+    const tp = ns.filter(n => n.data.marked && n.data.truth).length;
+    if (state.tab === 'compare') {
+      const fp = ours - tp, fn = truth - tp, tn = ns.length - tp - fp - fn;
+      head += `<span class="hint">`
+        + `TP <b style="color:#0a8761">${tp}</b> · FP <b style="color:#c26a09">${fp}</b> · `
+        + `FN <b style="color:#3b4bc0">${fn}</b> · TN <b>${tn}</b></span>`;
+    } else {
+      head += `<span class="hint">ours <b>${ours}</b> · dataset <b>${truth}</b> · `
+        + `agree <b style="color:#0a8761">${tp}</b>`
+        + (truth ? ` · caught ${Math.round(100 * tp / truth)}%` : '') + `</span>`;
+    }
   }
   box.innerHTML = head;
   box.hidden = false;
@@ -119,7 +126,7 @@ function renderLegend() {
 async function loadOverview() {
   try {
     $('loading').hidden = false;
-    const gnnTabs = ['gnn', 'marked', 'dataset', 'confirmed'];
+    const gnnTabs = ['gnn', 'marked', 'dataset', 'confirmed', 'compare'];
     const metric = gnnTabs.includes(state.tab) ? 'gnn' : 'pagerank';
     const cap = $('node-cap').value;
     const data = await getJSON(`/viz/overview?metric=${metric}&limit=${cap}`);

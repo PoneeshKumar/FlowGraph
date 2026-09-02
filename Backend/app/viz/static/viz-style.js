@@ -118,6 +118,21 @@
         { selector: 'node[?marked][?truth]',
           style: { 'opacity': 1, 'background-color': '#e7f7ef', 'border-width': 3,
                    'border-color': '#0d9d72', 'width': 17, 'height': 17 } }]);
+    if (tab === 'compare')
+      // Full confusion matrix — every account coloured by (our mark × dataset truth).
+      // The four selectors are mutually exclusive, so order doesn't matter.
+      return base.concat([
+        { selector: 'node[!marked][!truth]',                 // TN: both say clean
+          style: { 'background-color': '#d7dee8', 'border-color': '#aab6c6', 'opacity': 0.55 } },
+        { selector: 'node[?marked][!truth]',                 // FP: we say fraud, dataset clean
+          style: { 'opacity': 1, 'background-color': '#fff3e6', 'border-width': 2.5,
+                   'border-color': '#e8830c', 'width': 15, 'height': 15 } },
+        { selector: 'node[!marked][?truth]',                 // FN: we say clean, dataset fraud
+          style: { 'opacity': 1, 'background-color': '#eef0fe', 'border-width': 2.5,
+                   'border-color': '#4c5fd5', 'width': 15, 'height': 15 } },
+        { selector: 'node[?marked][?truth]',                 // TP: both say fraud
+          style: { 'opacity': 1, 'background-color': '#e7f7ef', 'border-width': 2.5,
+                   'border-color': '#0d9d72', 'width': 16, 'height': 16 } }]);
     return base;
   }
 
@@ -150,6 +165,12 @@
       return { title: 'Confirmed fraud', items: [
         { swatch: '#0d9d72', label: 'we detected it & the dataset confirms it' },
         { swatch: '#e5e9f0', label: 'everything else (dimmed)' }] };
+    if (tab === 'compare')
+      return { title: 'Compare — ours × dataset', items: [
+        { swatch: '#0d9d72', label: 'both say fraud (true positive)' },
+        { swatch: '#e8830c', label: 'we say fraud, dataset clean (false positive)' },
+        { swatch: '#4c5fd5', label: 'we say clean, dataset fraud (false negative)' },
+        { swatch: '#aab6c6', label: 'both say clean (true negative)' }] };
     return { title: '', items: [] };
   }
 

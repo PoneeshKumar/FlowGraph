@@ -40,14 +40,14 @@ test('baseStyle: labels can be suppressed for big graphs', () => {
 });
 
 test('styleForTab returns a non-empty array per tab', () => {
-  for (const t of ['cycle', 'pagerank', 'louvain', 'gnn', 'marked', 'dataset', 'confirmed']) {
+  for (const t of ['cycle', 'pagerank', 'louvain', 'gnn', 'marked', 'dataset', 'confirmed', 'compare']) {
     const s = V.styleForTab(t);
     assert.ok(Array.isArray(s) && s.length >= 2);
   }
 });
 
 test('legendFor returns a titled item list per tab', () => {
-  for (const t of ['cycle', 'pagerank', 'louvain', 'gnn', 'marked', 'dataset', 'confirmed']) {
+  for (const t of ['cycle', 'pagerank', 'louvain', 'gnn', 'marked', 'dataset', 'confirmed', 'compare']) {
     const l = V.legendFor(t);
     assert.ok(l.title && Array.isArray(l.items) && l.items.length >= 1);
   }
@@ -61,6 +61,16 @@ test('marked, dataset & confirmed tabs express true-positive agreement (green ru
     assert.ok(agree, `${tab} tab has a both-signals rule`);
     assert.equal(agree.style['border-color'], '#0d9d72');   // green = true positive
   }
+});
+
+test('compare tab colours all four confusion quadrants (incl. true negative)', () => {
+  const s = V.styleForTab('compare');
+  const has = (re) => s.some(r => re.test(r.selector));
+  assert.ok(has(/\[\?marked\]\[\?truth\]/), 'TP rule');
+  assert.ok(has(/\[\?marked\]\[!truth\]/), 'FP rule');
+  assert.ok(has(/\[!marked\]\[\?truth\]/), 'FN rule');
+  assert.ok(has(/\[!marked\]\[!truth\]/), 'TN rule (both say clean)');
+  assert.equal(V.legendFor('compare').items.length, 4);
 });
 
 test('confirmed tab isolates true positives (only the both-signals node is lit)', () => {
