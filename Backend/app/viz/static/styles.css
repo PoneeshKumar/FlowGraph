@@ -76,6 +76,16 @@ main { flex: 1; position: relative; display: flex; min-height: 0; }
 #count-readout b { color: var(--ink); font-weight: 600; }
 #count-readout .hint { display: block; color: var(--ink-4); font-size: 11px; margin-top: 2px; }
 
+#metrics-readout {
+  position: absolute; left: 50%; top: 14px; transform: translateX(-50%); z-index: 5;
+  padding: 7px 15px; border-radius: 999px; font-size: 12px; color: var(--ink-2);
+  background: var(--glass-strong); backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px); border: 1px solid var(--line);
+  box-shadow: 0 6px 20px -12px rgba(20, 33, 56, 0.4);
+  font-variant-numeric: tabular-nums; white-space: nowrap;
+}
+#metrics-readout b { color: var(--accent-deep); font-weight: 600; }
+
 #legend {
   position: absolute; left: 18px; bottom: 16px; z-index: 5;
   padding: 12px 14px; border-radius: 10px; font-size: 12px; color: var(--ink-2);

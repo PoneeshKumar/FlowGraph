@@ -15,6 +15,10 @@
         <input id="node-cap" type="range" min="100" max="2000" step="100" value="600"/>
         <span id="node-cap-val">600</span>
       </label>
+      <label class="rng" title="GNN risk cutoff for marking an account fraud">cutoff
+        <input id="cutoff" type="range" min="0.5" max="0.95" step="0.01" value="0.74"/>
+        <span id="cutoff-val">0.74</span>
+      </label>
       <span class="sep"></span>
       <select id="community-select"><option value="">community…</option></select>
       <input id="search-account" placeholder="account id…"/>
@@ -41,6 +45,7 @@
   <main>
     <div id="cy"></div>
     <div id="count-readout" hidden></div>
+    <div id="metrics-readout" hidden></div>
     <div id="legend" hidden></div>
     <div id="loading" hidden>laying out graph…</div>
     <aside id="inspector" hidden></aside>

@@ -15,6 +15,15 @@
 
   function edgeWidth(w) { return clamp(Number(w) || 1, 1, 10); }
 
+  // A node is "marked" (our detection) when it sits on a detected cycle OR its
+  // GNN risk clears the cutoff — the same rule the backend uses, recomputed
+  // client-side so the cutoff slider recolours instantly.
+  function isMarked(data, cutoff) {
+    if (data && data.in_cycle) return true;
+    const s = data ? data.gnn_risk_score : null;
+    return s !== null && s !== undefined && Number(s) >= cutoff;
+  }
+
   function communityColor(id) {
     const s = String(id === null || id === undefined ? '—' : id);
     let h = 0;
@@ -174,7 +183,7 @@
     return { title: '', items: [] };
   }
 
-  const api = { edgeWidth, communityColor, gnnHeatColor, pagerankSize,
+  const api = { edgeWidth, isMarked, communityColor, gnnHeatColor, pagerankSize,
                 baseStyle, styleForTab, legendFor, LABEL_LIMIT };
   if (typeof module !== 'undefined' && module.exports) module.exports = api;
   global.VizStyle = api;

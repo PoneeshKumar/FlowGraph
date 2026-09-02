@@ -10,6 +10,8 @@ const state = {
   view: 'overview',                 // 'overview' | 'subgraph'
   elements: { nodes: [], edges: [] },
   total: null,                      // full account count, for the "N of M" readout
+  cutoff: 0.74,                     // GNN mark cutoff (seeded from the model's tuned value)
+  head: null,                       // cached readout header (nodes/edges/overview)
 };
 
 const $ = (id) => document.getElementById(id);
@@ -61,8 +63,18 @@ function render(elements) {
   cy.one('layoutstop', () => { $('loading').hidden = true; cy.fit(undefined, 30); });
   cy.on('tap', 'node', (e) => onNodeTap(e.target));
   wireHover(cy);
+  applyMarks();                       // recompute marked from the current cutoff
   renderLegend();
-  renderReadout(elements);
+  const t = elements.truncated || {};
+  state.head = { nN: elements.nodes.length, eN: elements.edges.length, truncated: t };
+  renderReadout();
+}
+
+// Set each node's `marked` flag from the current cutoff (cycle OR GNN ≥ cutoff),
+// so moving the slider recolours the comparison tabs without refetching.
+function applyMarks() {
+  if (!cy) return;
+  cy.batch(() => cy.nodes().forEach((n) => n.data('marked', V.isMarked(n.data(), state.cutoff))));
 }
 
 function wireHover(cy) {
@@ -76,26 +88,29 @@ function wireHover(cy) {
   cy.on('mouseout', 'node', () => cy.elements().removeClass('faded hl'));
 }
 
-function renderReadout(elements) {
+function renderReadout() {
   const box = $('count-readout');
-  const nN = elements.nodes.length, eN = elements.edges.length;
-  const t = elements.truncated || {};
+  const h = state.head || { nN: 0, eN: 0, truncated: {} };
+  const t = h.truncated || {};
   let head;
   if (state.view === 'overview' && t.total) {
-    head = `<b>${nN.toLocaleString()}</b> of ${t.total.toLocaleString()} accounts`
-      + ` · <b>${eN.toLocaleString()}</b> flows`
+    head = `<b>${h.nN.toLocaleString()}</b> of ${t.total.toLocaleString()} accounts`
+      + ` · <b>${h.eN.toLocaleString()}</b> flows`
       + `<span class="hint">top hubs — full graph too large to draw</span>`;
   } else {
-    head = `<b>${nN}</b> nodes · <b>${eN}</b> flows`;
+    head = `<b>${h.nN}</b> nodes · <b>${h.eN}</b> flows`;
   }
-  // On the comparison tabs, quantify agreement in the current view.
-  if (['marked', 'dataset', 'confirmed', 'compare'].includes(state.tab)) {
-    const ns = elements.nodes;
-    const ours = ns.filter(n => n.data.marked).length;
-    const truth = ns.filter(n => n.data.truth).length;
-    const tp = ns.filter(n => n.data.marked && n.data.truth).length;
+  // On the comparison tabs, quantify agreement in the current view (live marks).
+  if (['marked', 'dataset', 'confirmed', 'compare'].includes(state.tab) && cy) {
+    let ours = 0, truth = 0, tp = 0, total = 0;
+    cy.nodes().forEach((n) => {
+      const d = n.data(); total++;
+      if (d.marked) ours++;
+      if (d.truth) truth++;
+      if (d.marked && d.truth) tp++;
+    });
     if (state.tab === 'compare') {
-      const fp = ours - tp, fn = truth - tp, tn = ns.length - tp - fp - fn;
+      const fp = ours - tp, fn = truth - tp, tn = total - tp - fp - fn;
       head += `<span class="hint">`
         + `TP <b style="color:#0a8761">${tp}</b> · FP <b style="color:#c26a09">${fp}</b> · `
         + `FN <b style="color:#3b4bc0">${fn}</b> · TN <b>${tn}</b></span>`;
@@ -107,6 +122,45 @@ function renderReadout(elements) {
   }
   box.innerHTML = head;
   box.hidden = false;
+}
+
+// --- cutoff slider -------------------------------------------------------
+let _metricsTimer = null;
+
+async function loadThresholdConfig() {
+  try {
+    const c = await getJSON('/viz/threshold');
+    state.cutoff = c.default;
+    const el = $('cutoff');
+    el.min = c.min; el.max = c.max; el.value = c.default;
+    $('cutoff-val').textContent = Number(c.default).toFixed(2);
+  } catch (err) { console.error('threshold', err); }
+}
+
+function onCutoff(value, commit) {
+  state.cutoff = Number(value);
+  $('cutoff-val').textContent = state.cutoff.toFixed(2);
+  applyMarks();                                 // live recolour
+  cy && cy.style(V.styleForTab(state.tab, { labels: cy.nodes().length <= V.LABEL_LIMIT }));
+  renderReadout();                              // view-local counts
+  if (commit) {                                 // whole-graph numbers on release (debounced)
+    clearTimeout(_metricsTimer);
+    _metricsTimer = setTimeout(() => fetchGlobalMetrics(state.cutoff), 150);
+  }
+}
+
+async function fetchGlobalMetrics(cutoff) {
+  const box = $('metrics-readout');
+  try {
+    const m = await getJSON(`/viz/metrics?cutoff=${cutoff}`);
+    if (!m.loaded) { box.hidden = true; return; }
+    box.innerHTML = `whole graph @ ${cutoff.toFixed(2)} — `
+      + `precision <b>${(m.precision * 100).toFixed(0)}%</b> · `
+      + `recall <b>${(m.recall * 100).toFixed(0)}%</b> · `
+      + `<b>${m.fp.toLocaleString()}</b> false positives · `
+      + `<b>${m.tp.toLocaleString()}</b> caught`;
+    box.hidden = false;
+  } catch (err) { box.hidden = true; }
 }
 
 function renderLegend() {
@@ -156,6 +210,7 @@ function setTab(tab) {
     const labels = cy.nodes().length <= V.LABEL_LIMIT;
     cy.style(V.styleForTab(tab, { labels }));   // re-style same elements, no refetch
   }
+  renderReadout();                              // refresh the comparison counts
 }
 
 function onNodeTap(node) {
@@ -205,7 +260,8 @@ async function pollRun(runId) {
       clearInterval(timer);
       $('run-btn').disabled = false;
       if (s.status === 'failed') label.textContent = `failed at ${s.stage}: ${s.error}`;
-      else { label.textContent = 'done'; populateCommunities(); loadOverview(); }
+      else { label.textContent = 'done'; populateCommunities(); loadOverview();
+             fetchGlobalMetrics(state.cutoff); }
     }
   }, 1500);
 }
@@ -217,6 +273,8 @@ function wireEvents() {
   $('overview-btn').addEventListener('click', loadOverview);
   $('node-cap').addEventListener('input', (e) => { $('node-cap-val').textContent = e.target.value; });
   $('node-cap').addEventListener('change', () => { if (state.view === 'overview') loadOverview(); });
+  $('cutoff').addEventListener('input', (e) => onCutoff(e.target.value, false));   // live recolour
+  $('cutoff').addEventListener('change', (e) => onCutoff(e.target.value, true));   // + whole-graph metrics
   $('community-select').addEventListener('change', (e) => {
     if (e.target.value) loadSubgraph({ community_id: e.target.value });
   });
@@ -237,6 +295,11 @@ function wireEvents() {
   });
 }
 
-wireEvents();
-populateCommunities();
-loadOverview();     // open on the whole-graph map, not a blank canvas
+async function init() {
+  wireEvents();
+  await loadThresholdConfig();     // seed the cutoff from the model's tuned value first
+  populateCommunities();
+  await loadOverview();            // open on the whole-graph map, not a blank canvas
+  fetchGlobalMetrics(state.cutoff);
+}
+init();
