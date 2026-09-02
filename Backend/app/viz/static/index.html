@@ -1,0 +1,53 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8"/>
+  <meta name="viewport" content="width=device-width, initial-scale=1"/>
+  <title>FlowGraph — Pipeline Visualiser</title>
+  <link rel="stylesheet" href="/viz/static/styles.css"/>
+</head>
+<body>
+  <header id="topbar">
+    <span class="brand">FlowGraph Pipeline</span>
+    <div class="controls">
+      <button id="overview-btn" class="primary">Whole graph</button>
+      <label class="rng">nodes
+        <input id="node-cap" type="range" min="100" max="2000" step="100" value="600"/>
+        <span id="node-cap-val">600</span>
+      </label>
+      <span class="sep"></span>
+      <select id="community-select"><option value="">community…</option></select>
+      <input id="search-account" placeholder="account id…"/>
+      <select id="hops"><option>1</option><option selected>2</option><option>3</option><option>4</option></select>
+      <button id="explore-btn">Explore</button>
+    </div>
+    <div class="run">
+      <button id="run-btn">Run pipeline</button>
+      <div id="progress" hidden><div id="progress-bar"></div><span id="progress-label"></span></div>
+    </div>
+  </header>
+
+  <nav id="tabs">
+    <button data-tab="gnn" class="active">GNN</button>
+    <button data-tab="pagerank">PageRank</button>
+    <button data-tab="louvain">Louvain</button>
+    <button data-tab="cycle">Cycle</button>
+    <button data-tab="marked">Marked (ours)</button>
+    <button data-tab="dataset">Dataset (truth)</button>
+    <button data-tab="confirmed">Confirmed ✓</button>
+    <button data-tab="compare">Compare</button>
+  </nav>
+
+  <main>
+    <div id="cy"></div>
+    <div id="count-readout" hidden></div>
+    <div id="legend" hidden></div>
+    <div id="loading" hidden>laying out graph…</div>
+    <aside id="inspector" hidden></aside>
+  </main>
+
+  <script src="/viz/static/vendor/cytoscape.min.js"></script>
+  <script src="/viz/static/viz-style.js"></script>
+  <script src="/viz/static/app.js"></script>
+</body>
+</html>
