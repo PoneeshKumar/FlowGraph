@@ -89,7 +89,7 @@ function renderReadout(elements) {
     head = `<b>${nN}</b> nodes · <b>${eN}</b> flows`;
   }
   // On the comparison tabs, quantify the agreement in the current view.
-  if (state.tab === 'marked' || state.tab === 'dataset') {
+  if (['marked', 'dataset', 'confirmed'].includes(state.tab)) {
     const ns = elements.nodes;
     const ours = ns.filter(n => n.data.marked).length;
     const truth = ns.filter(n => n.data.truth).length;
@@ -119,7 +119,7 @@ function renderLegend() {
 async function loadOverview() {
   try {
     $('loading').hidden = false;
-    const gnnTabs = ['gnn', 'marked', 'dataset'];
+    const gnnTabs = ['gnn', 'marked', 'dataset', 'confirmed'];
     const metric = gnnTabs.includes(state.tab) ? 'gnn' : 'pagerank';
     const cap = $('node-cap').value;
     const data = await getJSON(`/viz/overview?metric=${metric}&limit=${cap}`);

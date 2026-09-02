@@ -110,6 +110,14 @@
                    'border-color': '#4c5fd5', 'width': 16, 'height': 16 } },
         { selector: 'node[?truth][?marked]',
           style: { 'background-color': '#e7f7ef', 'border-color': '#0d9d72' } }]);
+    if (tab === 'confirmed')
+      // Only the true positives: real frauds our pipeline actually caught
+      // (marked AND dataset-labelled). Everything else is dimmed away.
+      return base.concat([
+        { selector: 'node', style: { 'opacity': 0.09 } },
+        { selector: 'node[?marked][?truth]',
+          style: { 'opacity': 1, 'background-color': '#e7f7ef', 'border-width': 3,
+                   'border-color': '#0d9d72', 'width': 17, 'height': 17 } }]);
     return base;
   }
 
@@ -138,6 +146,10 @@
         { swatch: '#0d9d72', label: 'labelled & we caught it (true positive)' },
         { swatch: '#4c5fd5', label: 'labelled, we missed it (false negative)' },
         { swatch: '#e5e9f0', label: 'not labelled (dimmed)' }] };
+    if (tab === 'confirmed')
+      return { title: 'Confirmed fraud', items: [
+        { swatch: '#0d9d72', label: 'we detected it & the dataset confirms it' },
+        { swatch: '#e5e9f0', label: 'everything else (dimmed)' }] };
     return { title: '', items: [] };
   }
 
