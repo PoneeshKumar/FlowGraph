@@ -44,7 +44,9 @@ def shape_elements(nodes: List[dict], rels: List[dict]) -> Dict[str, Any]:
             "gnn_risk_score": n.get("gnn_risk_score"),
             "gnn_risk_tier": n.get("gnn_risk_tier"),
             "in_cycle": bool(n.get("in_cycle", False)),
-            "marked": bool(n.get("marked", False)),
+            "marked": bool(n.get("marked", False)),          # our pipeline's mark
+            "truth": bool(n.get("truth", False)),            # dataset ground-truth label
+            "truth_typology": n.get("truth_typology"),
             "signals": n.get("signals"),
         }})
     seen_e, out_e = set(), []
@@ -73,6 +75,8 @@ def _shape_record(rec) -> Dict[str, Any]:
     objects, derives ``source``/``target`` from the relationship endpoints, and
     sets the ``marked`` flag (in a cycle, or GNN risk ≥ 0.5).
     """
+    from app.viz import truth
+    tset = truth.truth_set()
     nodes = [dict(n) for n in rec["nodes"]]
     rels = []
     for r in rec["rels"]:
@@ -80,7 +84,10 @@ def _shape_record(rec) -> Dict[str, Any]:
             continue
         rels.append({"source": r.start_node["id"], "target": r.end_node["id"], **dict(r)})
     for n in nodes:
+        nid = n.get("id")
         n["marked"] = bool(n.get("in_cycle")) or float(n.get("gnn_risk_score") or 0.0) >= 0.5
+        n["truth"] = nid in tset
+        n["truth_typology"] = truth.typology_of(nid)
     return shape_elements(nodes, rels)
 
 

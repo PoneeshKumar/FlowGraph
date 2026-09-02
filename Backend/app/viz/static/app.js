@@ -80,13 +80,25 @@ function renderReadout(elements) {
   const box = $('count-readout');
   const nN = elements.nodes.length, eN = elements.edges.length;
   const t = elements.truncated || {};
+  let head;
   if (state.view === 'overview' && t.total) {
-    box.innerHTML = `<b>${nN.toLocaleString()}</b> of ${t.total.toLocaleString()} accounts`
+    head = `<b>${nN.toLocaleString()}</b> of ${t.total.toLocaleString()} accounts`
       + ` · <b>${eN.toLocaleString()}</b> flows`
       + `<span class="hint">top hubs — full graph too large to draw</span>`;
   } else {
-    box.innerHTML = `<b>${nN}</b> nodes · <b>${eN}</b> flows`;
+    head = `<b>${nN}</b> nodes · <b>${eN}</b> flows`;
   }
+  // On the comparison tabs, quantify the agreement in the current view.
+  if (state.tab === 'marked' || state.tab === 'dataset') {
+    const ns = elements.nodes;
+    const ours = ns.filter(n => n.data.marked).length;
+    const truth = ns.filter(n => n.data.truth).length;
+    const agree = ns.filter(n => n.data.marked && n.data.truth).length;
+    head += `<span class="hint">ours <b>${ours}</b> · dataset <b>${truth}</b> · `
+      + `agree <b style="color:#0a8761">${agree}</b>`
+      + (truth ? ` · caught ${Math.round(100 * agree / truth)}%` : '') + `</span>`;
+  }
+  box.innerHTML = head;
   box.hidden = false;
 }
 
@@ -107,7 +119,8 @@ function renderLegend() {
 async function loadOverview() {
   try {
     $('loading').hidden = false;
-    const metric = (state.tab === 'gnn' || state.tab === 'marked') ? 'gnn' : 'pagerank';
+    const gnnTabs = ['gnn', 'marked', 'dataset'];
+    const metric = gnnTabs.includes(state.tab) ? 'gnn' : 'pagerank';
     const cap = $('node-cap').value;
     const data = await getJSON(`/viz/overview?metric=${metric}&limit=${cap}`);
     state.view = 'overview';
@@ -152,7 +165,8 @@ function onNodeTap(node) {
     <div>community: <code>${fmt(d.community_id)}</code></div>
     <div>GNN risk: ${risk} (${fmt(d.gnn_risk_tier)})</div>
     <div>in cycle: ${!!d.in_cycle}</div>
-    <div>marked: ${!!d.marked}</div>
+    <div>marked (ours): ${!!d.marked}</div>
+    <div>dataset label: ${d.truth ? '⚠ laundering — ' + fmt(d.truth_typology) : 'none'}</div>
     <button id="recenter">Explore neighbourhood</button>`;
   $('recenter').onclick = () =>
     loadSubgraph({ account_id: d.id, hops: $('hops').value });

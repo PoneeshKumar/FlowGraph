@@ -26,6 +26,15 @@ def test_shape_elements_edge_weight_and_direction():
     assert {n["data"]["id"] for n in out["nodes"]} == {"a", "b"}
 
 
+def test_shape_elements_carries_truth_flag():
+    nodes = [{"id": "a", "truth": True, "truth_typology": "FAN-OUT"}, {"id": "b"}]
+    out = store.shape_elements(nodes, [])
+    a = next(n["data"] for n in out["nodes"] if n["data"]["id"] == "a")
+    b = next(n["data"] for n in out["nodes"] if n["data"]["id"] == "b")
+    assert a["truth"] is True and a["truth_typology"] == "FAN-OUT"
+    assert b["truth"] is False and b["truth_typology"] is None   # default when unlabelled
+
+
 def test_shape_elements_dedups():
     nodes = [{"id": "a"}, {"id": "a"}]
     rels = [{"source": "a", "target": "b"}, {"source": "a", "target": "b"}]

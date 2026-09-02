@@ -20,6 +20,8 @@ async def startup() -> None:
     await _neo4j.initialize()
     _pg = PostgresClient()
     await _pg.initialize()
+    from app.viz import truth
+    truth.preload()      # parse ground-truth labels once, off the request path
 
 
 async def shutdown() -> None:

@@ -91,11 +91,25 @@
                  'width': 'data(_prSize)', 'height': 'data(_prSize)',
                  'border-color': 'rgba(30,44,74,0.2)' } }]);
     if (tab === 'marked')
+      // Our pipeline's marks. Green where the dataset agrees (true positive),
+      // orange where it doesn't (our mark, not a labelled account).
       return base.concat([
-        { selector: 'node', style: { 'opacity': 0.16 } },
+        { selector: 'node', style: { 'opacity': 0.14 } },
         { selector: 'node[?marked]',
-          style: { 'opacity': 1, 'background-color': '#fff5f4', 'border-width': 2.5,
-                   'border-color': '#d83a30', 'width': 16, 'height': 16 } }]);
+          style: { 'opacity': 1, 'background-color': '#fff3e6', 'border-width': 2.5,
+                   'border-color': '#e8830c', 'width': 16, 'height': 16 } },
+        { selector: 'node[?marked][?truth]',
+          style: { 'background-color': '#e7f7ef', 'border-color': '#0d9d72' } }]);
+    if (tab === 'dataset')
+      // The dataset's ground-truth labels. Green where we also caught it (true
+      // positive), indigo where we missed it (false negative).
+      return base.concat([
+        { selector: 'node', style: { 'opacity': 0.14 } },
+        { selector: 'node[?truth]',
+          style: { 'opacity': 1, 'background-color': '#eef0fe', 'border-width': 2.5,
+                   'border-color': '#4c5fd5', 'width': 16, 'height': 16 } },
+        { selector: 'node[?truth][?marked]',
+          style: { 'background-color': '#e7f7ef', 'border-color': '#0d9d72' } }]);
     return base;
   }
 
@@ -115,9 +129,15 @@
       return { title: 'GNN risk score', items: [
         { swatch: 'grad-risk', label: 'mint (low) → red (critical)' }] };
     if (tab === 'marked')
-      return { title: 'Marked accounts', items: [
-        { swatch: 'ring-red', label: 'flagged (GNN / cycle / community)' },
-        { swatch: '#e5e9f0', label: 'unflagged (dimmed)' }] };
+      return { title: 'Marked — ours', items: [
+        { swatch: '#0d9d72', label: 'we flagged & dataset agrees (true positive)' },
+        { swatch: '#e8830c', label: 'we flagged, not labelled (false positive)' },
+        { swatch: '#e5e9f0', label: 'not flagged (dimmed)' }] };
+    if (tab === 'dataset')
+      return { title: 'Dataset — ground truth', items: [
+        { swatch: '#0d9d72', label: 'labelled & we caught it (true positive)' },
+        { swatch: '#4c5fd5', label: 'labelled, we missed it (false negative)' },
+        { swatch: '#e5e9f0', label: 'not labelled (dimmed)' }] };
     return { title: '', items: [] };
   }
 
