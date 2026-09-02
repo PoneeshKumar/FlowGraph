@@ -15,7 +15,6 @@ from contextlib import asynccontextmanager
 
 import asyncpg
 from asyncpg import Pool, Connection
-
 from config import (
     POSTGRES_DSN,
     POSTGRES_POOL_SIZE,
