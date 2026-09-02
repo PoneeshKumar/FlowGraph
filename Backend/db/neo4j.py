@@ -15,7 +15,7 @@ Edge model:
 
 import logging
 from datetime import datetime, timezone
-from typing import Any, Dict, List, Optional, Sequence
+from typing import Any, Callable, Dict, Iterable, List, Optional, Sequence
 
 from neo4j import AsyncGraphDatabase, AsyncDriver, AsyncSession, Query
 from neo4j.exceptions import ServiceUnavailable
@@ -821,6 +821,66 @@ class Neo4jClient:
         except Exception as e:
             logger.error(f"Failed to write community assignments: {e}")
             raise
+
+    async def write_gnn_scores(
+        self,
+        scores: Dict[str, float],
+        tier_of: Callable[[float], str],
+        batch_size: int = 10_000,
+    ) -> int:
+        """Persist per-account GNN risk score + tier onto Account nodes.
+
+        Derived analytical state, written directly like community assignments.
+        Returns the number of accounts matched and updated.
+        """
+        if not scores:
+            return 0
+        rows = [{"id": aid, "score": float(sc), "tier": tier_of(float(sc))}
+                for aid, sc in scores.items()]
+        query = """
+        UNWIND $rows AS row
+        MATCH (a:Account {id: row.id})
+        SET a.gnn_risk_score = row.score, a.gnn_risk_tier = row.tier
+        RETURN count(a) AS n
+        """
+        written = 0
+        async with self.driver.session(database=NEO4J_DATABASE) as session:
+            for i in range(0, len(rows), batch_size):
+                batch = rows[i:i + batch_size]
+                result = await session.run(query, rows=batch)
+                record = await result.single()
+                written += record["n"] if record else 0
+        logger.info("GNN scores written | accounts=%d", written)
+        return written
+
+    async def write_cycle_membership(
+        self,
+        account_ids: Iterable[str],
+        batch_size: int = 10_000,
+    ) -> int:
+        """Set in_cycle=true on the given accounts, clearing it everywhere else.
+
+        A full refresh so membership from a prior run does not linger. Returns
+        the number of accounts set true.
+        """
+        ids = list(dict.fromkeys(account_ids))
+        async with self.driver.session(database=NEO4J_DATABASE) as session:
+            result = await session.run(
+                "MATCH (a:Account) WHERE a.in_cycle = true SET a.in_cycle = false"
+            )
+            await result.consume()
+            written = 0
+            for i in range(0, len(ids), batch_size):
+                batch = ids[i:i + batch_size]
+                result = await session.run(
+                    "UNWIND $ids AS aid MATCH (a:Account {id: aid}) "
+                    "SET a.in_cycle = true RETURN count(a) AS n",
+                    ids=batch,
+                )
+                record = await result.single()
+                written += record["n"] if record else 0
+        logger.info("Cycle membership written | accounts=%d", written)
+        return written
 
     async def create_account_node(
         self,

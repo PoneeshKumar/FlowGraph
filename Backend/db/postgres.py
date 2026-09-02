@@ -8,6 +8,7 @@ Provides atomic dual-write semantics: transaction + outbox inserted in single tr
 import asyncio
 import json
 import logging
+import uuid
 from typing import Any, Dict, List, Optional
 from datetime import datetime, timedelta
 from contextlib import asynccontextmanager
@@ -423,6 +424,90 @@ class PostgresClient:
         async with self._get_connection() as conn:
             rows = await conn.fetch(query, *args)
         return [row["account_id"] for row in rows]
+
+    # ==================== PIPELINE RUNS (community visualiser) ====================
+
+    async def create_pipeline_run(self) -> str:
+        """Create a new pipeline run in 'queued' status; returns its uuid string."""
+        run_id = str(uuid.uuid4())
+        async with self._get_connection() as conn:
+            await conn.execute(
+                "INSERT INTO pipeline_runs (id, status) VALUES ($1::uuid, 'queued')",
+                run_id,
+            )
+        return run_id
+
+    async def update_pipeline_run(
+        self,
+        run_id: str,
+        *,
+        status: Optional[str] = None,
+        stage: Optional[str] = None,
+        progress: Optional[float] = None,
+        counts: Optional[Dict[str, Any]] = None,
+        error: Optional[str] = None,
+        finished: bool = False,
+    ) -> None:
+        """Patch a run's mutable fields. Only the provided fields are updated."""
+        sets: List[str] = []
+        args: List[Any] = []
+
+        def add(col: str, val: Any) -> None:
+            args.append(val)
+            sets.append(f"{col} = ${len(args)}")
+
+        if status is not None:
+            add("status", status)
+        if stage is not None:
+            add("stage", stage)
+        if progress is not None:
+            add("progress", progress)
+        if counts is not None:
+            add("counts", json.dumps(counts))
+        if error is not None:
+            add("error", error)
+        if finished:
+            sets.append("finished_at = now()")
+        if not sets:
+            return
+        args.append(run_id)
+        query = (
+            f"UPDATE pipeline_runs SET {', '.join(sets)} WHERE id = ${len(args)}::uuid"
+        )
+        async with self._get_connection() as conn:
+            await conn.execute(query, *args)
+
+    @staticmethod
+    def _row_to_run(row: Optional[Any]) -> Optional[Dict[str, Any]]:
+        if row is None:
+            return None
+        d = dict(row)
+        if isinstance(d.get("counts"), str):
+            d["counts"] = json.loads(d["counts"])
+        d["id"] = str(d["id"])
+        return d
+
+    async def get_pipeline_run(self, run_id: str) -> Optional[Dict[str, Any]]:
+        async with self._get_connection() as conn:
+            row = await conn.fetchrow(
+                "SELECT * FROM pipeline_runs WHERE id = $1::uuid", run_id
+            )
+        return self._row_to_run(row)
+
+    async def get_latest_pipeline_run(self) -> Optional[Dict[str, Any]]:
+        async with self._get_connection() as conn:
+            row = await conn.fetchrow(
+                "SELECT * FROM pipeline_runs ORDER BY started_at DESC LIMIT 1"
+            )
+        return self._row_to_run(row)
+
+    async def get_active_pipeline_run(self) -> Optional[Dict[str, Any]]:
+        async with self._get_connection() as conn:
+            row = await conn.fetchrow(
+                "SELECT * FROM pipeline_runs WHERE status IN ('queued','running') "
+                "ORDER BY started_at DESC LIMIT 1"
+            )
+        return self._row_to_run(row)
 
     async def health_check(self) -> bool:
         """Test database connection."""

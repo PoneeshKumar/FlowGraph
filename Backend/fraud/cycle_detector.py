@@ -259,6 +259,7 @@ class CycleDetector:
         self,
         account_id: str,
         reference_time: "datetime | None" = None,
+        window_hours: "int | None" = None,
     ) -> List[Dict[str, Any]]:
         """
         Run cycle detection for one account and persist any flags found.
@@ -273,13 +274,20 @@ class CycleDetector:
 
         Args:
             account_id: Account to run detection from
+            reference_time: Anchor for the look-back window (defaults to now).
+            window_hours: Override the look-back span. Real-time detection uses the
+                default 48h; a batch/investigative sweep over a historical dataset
+                passes a span covering the data's own time range (otherwise "the
+                last 48 hours" excludes every edge). ``None`` keeps find_cycles'
+                default (CYCLE_WINDOW_HOURS).
 
         Returns:
             List of persisted flag dicts (may be empty if no cycles found)
         """
-        raw_cycles = await self.neo4j.find_cycles(
-            account_id, reference_time=reference_time
-        )
+        cycle_kwargs = {"reference_time": reference_time}
+        if window_hours is not None:
+            cycle_kwargs["window_hours"] = window_hours
+        raw_cycles = await self.neo4j.find_cycles(account_id, **cycle_kwargs)
 
         if not raw_cycles:
             return []
