@@ -27,5 +27,13 @@ export const apiClient = {
   getAIReport: async (accountId) => {
     const { data } = await axios.get(`${API_BASE}/accounts/${accountId}/enrich`);
     return data;
+  },
+  evaluateRisk: async (accountId, params = {}) => {
+    const { data } = await axios.post(
+      `${API_BASE}/risk/evaluate/${accountId}`,
+      null,
+      { params }
+    );
+    return data;
   }
 };
