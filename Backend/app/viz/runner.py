@@ -115,7 +115,13 @@ class PipelineRunner:
                 run_dir.exists(), cache.exists())
             return {}
         feature_set = load_feature_cache(cache)
-        run_dirs = [run_dir] + [Path(p) for p in self.s.GNN_ENSEMBLE_RUNS]
+        # Ensemble members are optional artifacts (ml/runs is gitignored); skip any
+        # that aren't on disk so serving falls back to the single champion instead
+        # of crashing. ensemble_scores of one member == that member's scores.
+        members = [p for p in self.s.GNN_ENSEMBLE_RUNS if Path(p).exists()]
+        run_dirs = [run_dir] + [Path(p) for p in members]
+        logger.info("GNN scoring with %d model(s): %s",
+                    len(run_dirs), ", ".join(d.name for d in run_dirs))
         scores = ensemble_scores(run_dirs, feature_set)
         mapping = {nid: float(sc) for nid, sc in zip(feature_set.node_ids, scores)}
         await self.neo4j.write_gnn_scores(mapping, tier_of=risk_level)

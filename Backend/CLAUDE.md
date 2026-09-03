@@ -39,12 +39,23 @@ Payment events → Kafka → Python consumer (Faust)
   documents it. Champion model config is `ml/runs/v10_L3` (regenerable — see
   *Artifacts & branch*); full numbers and methodology in `ml/RESULTS.md`.
 
-**Built but not wired into serving:**
-- The GNN is trained and scored **offline / batch** (`ml/predict.py`,
-  `ml/ensemble.py`) against a cached feature set. It is **not yet hooked into the
-  live pipeline** — nothing in the consumer/outbox path calls it per-event or
-  writes its scores back as risk flags. Wiring it into the risk-flag aggregator
-  is the main remaining integration task for this layer.
+**Serving paths (both built):**
+- **Batch / on-demand** — the GNN scores the whole graph against a cached feature
+  set (`ml/predict.py`, `ml/ensemble.py`), triggered by `/viz`'s "Run pipeline".
+- **Live per-event** (`LIVE_SCORING_ENABLED`, default off) — the outbox worker
+  re-scores the accounts each synced event touched **plus their bounded 3-hop
+  neighborhood** and writes scores back (`gnn_risk_score` + a `LIVE_GNN` risk
+  flag). Enabled by the inductive model (existing weights score new accounts, no
+  retrain). Pieces: `db/neo4j.py:export_neighborhood` (bounded k-hop export),
+  `ml/live_scorer.py:LiveScorer` (resident cached models), and
+  `app/services/incremental_scorer.py:IncrementalScorer` (assemble → score →
+  write-back), hooked in `worker/outbox_sync_worker.py` best-effort so scoring
+  never blocks the sync. **v1 caveats:** PageRank/Louvain use last-batch stored
+  props and the 12 Redis volume features are zeroed (`get_all_account_volumes` is a
+  whole-keyspace scan, too costly per event) — the GNN message passing over the
+  live graph structure is what's fresh, so a live score differs slightly from the
+  batch score by design. Next: reconstruct volumes from the neighborhood's known
+  edge ZSETs; time-bounded features.
 
 **Pipeline visualiser (`/viz`) — built on branch `feature/community-visualiser`:**
 - A standalone, FastAPI-served viewer at `/viz` (`app/viz/`) that surfaces the
@@ -301,8 +312,19 @@ a random ranker; `precision@8` on the full graph is 100%.
 where ensembling *pays off*: full-batch seed-ensembles were a wash (+0.007,
 members near-identical), but mini-batch draws a fresh neighbourhood every step so
 seeds land on genuinely different functions and averaging cancels the variance.
-Cost is K× inference (offline/batch use); the single `v10_L3` is the deployable
-default. Gain saturates by 2 members.
+Cost is K× inference (offline/batch use). Gain saturates by 2 members.
+
+**The 3-seed ensemble is now the `/viz` serving default** (`GNN_ENSEMBLE_RUNS =
+[v10_L3_s1, v10_L3_s7]`). It was chosen specifically to cut false positives:
+because averaging cancels each seed's idiosyncratic FPs, at **matched recall it
+drops whole-graph FP ~24%** (e.g. recall 0.55: 507→385; recall 0.50: 320→253) and
+lifts PR-AUC 0.687→0.710. `PipelineRunner._gnn` skips any ensemble member absent
+from disk (`ml/runs` is gitignored), so serving degrades gracefully to the single
+`v10_L3` champion. The remaining FPs are **not separable by any cheap structural
+signal** — degree, community-periphery, PageRank and community-risk all fail to
+distinguish them from true frauds; only the GNN's own score separates them (FPs
+cluster just above the threshold, real frauds at high confidence). So FP
+reduction comes from a better score (ensemble / more data), not a post-filter.
 
 ### Recall by typology (whole graph, F1 threshold)
 
@@ -361,7 +383,9 @@ for the GNN existing. **BIPARTITE (~12%) is the genuine hold-out** (see below).
 
 ## Worth doing next
 
-1. **Wire the GNN into serving** — the biggest gap: it is offline-only today.
+1. **Serving — done** (batch via `/viz` + opt-in live per-event via the outbox,
+   `LIVE_SCORING_ENABLED`). Next here: reconstruct live Redis volume features from
+   the neighborhood's edge ZSETs (v1 zeroes them) and time-bounded features.
 2. **Time-bounded features** so the temporal evaluation is real.
 3. **A larger dataset** (HI-Medium → evaluate on HI-Small) for more laundering
    examples — the remaining path past ~0.735 is data, not modelling.

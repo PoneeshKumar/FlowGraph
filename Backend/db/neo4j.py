@@ -15,7 +15,7 @@ Edge model:
 
 import logging
 from datetime import datetime, timezone
-from typing import Any, Callable, Dict, Iterable, List, Optional, Sequence
+from typing import Any, Callable, Dict, Iterable, List, Optional, Sequence, Tuple
 
 from neo4j import AsyncGraphDatabase, AsyncDriver, AsyncSession, Query
 from neo4j.exceptions import ServiceUnavailable
@@ -766,6 +766,85 @@ class Neo4jClient:
         except Exception as e:
             logger.error(f"Failed to export account nodes: {e}")
             raise
+
+    async def export_neighborhood(
+        self,
+        seed_ids: Iterable[str],
+        hops: int = 3,
+        fanout: int = 10,
+        node_cap: int = 300,
+    ) -> Tuple[List[Dict[str, Any]], List[Dict[str, Any]]]:
+        """Export a bounded k-hop neighborhood around ``seed_ids`` for live scoring.
+
+        Returns ``(nodes, edges)`` in the SAME shape as ``export_account_nodes`` /
+        ``export_flows_to_edges``, so ``FeatureBuilder._assemble`` consumes them
+        unchanged. This is both the *affected set* (whose GNN scores shift when a
+        new edge lands) and the feature source for one incremental score.
+
+        The neighborhood is grown undirected (message passing is bidirectional in
+        the champion), one hop at a time, taking at most ``fanout`` highest-value
+        counterparties per frontier node and stopping once ``node_cap`` accounts are
+        collected — so a high-degree hub event can never cascade unbounded.
+        """
+        collected: List[str] = list(dict.fromkeys(seed_ids))  # dedupe, keep order
+        seen = set(collected)
+        frontier = list(collected)
+
+        expand = (
+            "UNWIND $frontier AS fid "
+            "CALL (fid) { "
+            "  MATCH (a:Account {id: fid})-[r:FLOWS_TO]-(b:Account) WHERE b.id <> fid "
+            "  RETURN b.id AS nid ORDER BY r.total_amount DESC LIMIT $fanout "
+            "} RETURN DISTINCT nid"
+        )
+        async with self.driver.session(database=NEO4J_DATABASE) as session:
+            for _ in range(max(int(hops), 0)):
+                if not frontier or len(collected) >= node_cap:
+                    break
+                res = await session.run(expand, frontier=frontier, fanout=int(fanout))
+                nxt: List[str] = []
+                async for rec in res:
+                    nid = rec["nid"]
+                    if nid in seen:
+                        continue
+                    if len(collected) >= node_cap:
+                        break
+                    seen.add(nid)
+                    collected.append(nid)
+                    nxt.append(nid)
+                frontier = nxt
+
+            node_q = (
+                "MATCH (n:Account) WHERE n.id IN $ids "
+                "RETURN n.id AS id, labels(n) AS labels, "
+                "       n.pagerank_score AS pagerank_score, n.community_id AS community_id, "
+                "       n.created_at AS created_at, n.kyc_tier AS kyc_tier, "
+                "       n.risk_score AS risk_score, n.country AS country, "
+                "       n.account_age AS account_age, n.cumulative_volume AS cumulative_volume"
+            )
+            res = await session.run(node_q, ids=collected)
+            nodes = [
+                {"id": r["id"], "labels": list(r["labels"] or []),
+                 "pagerank_score": r["pagerank_score"], "community_id": r["community_id"],
+                 "created_at": r["created_at"], "kyc_tier": r["kyc_tier"],
+                 "risk_score": r["risk_score"], "country": r["country"],
+                 "account_age": r["account_age"], "cumulative_volume": r["cumulative_volume"]}
+                async for r in res if r["id"]
+            ]
+
+            edge_q = (
+                "MATCH (a:Account)-[f:FLOWS_TO]->(b:Account) "
+                "WHERE a.id IN $ids AND b.id IN $ids "
+                "RETURN a.id AS src, b.id AS dst, f.total_amount AS total_amount, "
+                "       f.tx_count AS tx_count, f.first_ts AS first_ts, f.last_ts AS last_ts"
+            )
+            res = await session.run(edge_q, ids=collected)
+            edges = [
+                {"src": r["src"], "dst": r["dst"], "total_amount": r["total_amount"],
+                 "tx_count": r["tx_count"], "first_ts": r["first_ts"], "last_ts": r["last_ts"]}
+                async for r in res
+            ]
+        return nodes, edges
 
     async def write_community_assignments(
         self,
