@@ -48,9 +48,22 @@ def test_confusion_at_reports_unloaded():
 def test_model_threshold_reads_run_json(tmp_path):
     threshold._cached = None
     run = tmp_path / "run"; run.mkdir()
-    (run / "result.json").write_text(json.dumps({"threshold": 0.7376}))
+    # A real result.json always carries the persisted scaler state (see
+    # ml/predict.py:load_run) — a run missing it predates scaler persistence
+    # and is unusable for inference, so the loader falls back instead.
+    (run / "result.json").write_text(json.dumps({"threshold": 0.7376, "scaler": {"kind": "quantile"}}))
     with patch.object(threshold.settings, "GNN_RUN_DIR", str(run)):
         assert abs(threshold.model_threshold() - 0.7376) < 1e-9
+    threshold._cached = None
+
+
+def test_model_threshold_falls_back_when_scaler_missing(tmp_path):
+    threshold._cached = None
+    run = tmp_path / "run"; run.mkdir()
+    (run / "result.json").write_text(json.dumps({"threshold": 0.7376}))
+    with patch.object(threshold.settings, "GNN_RUN_DIR", str(run)), \
+         patch.object(threshold.settings, "MARK_GNN_THRESHOLD", 0.5):
+        assert threshold.model_threshold() == 0.5
     threshold._cached = None
 
 

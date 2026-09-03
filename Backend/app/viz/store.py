@@ -86,7 +86,7 @@ def _shape_record(rec) -> Dict[str, Any]:
         rels.append({"source": r.start_node["id"], "target": r.end_node["id"], **dict(r)})
     for n in nodes:
         nid = n.get("id")
-        n["marked"] = bool(n.get("in_cycle")) or float(n.get("gnn_risk_score") or 0.0) >= cutoff
+        n["marked"] = threshold.is_marked(n.get("gnn_risk_score"), n.get("in_cycle"), cutoff)
         n["truth"] = nid in tset
         n["truth_typology"] = truth.typology_of(nid)
     return shape_elements(nodes, rels)

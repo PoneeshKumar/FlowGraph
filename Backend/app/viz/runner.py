@@ -125,6 +125,7 @@ class PipelineRunner:
         await self._mark(run_id, "aggregate", 0.9)
         from app.viz import threshold, metrics
         metrics.invalidate()                     # scores just changed — drop stale cache
+        threshold.invalidate()                    # pick up a hot-swapped run's tuned cutoff
         weights = MarkWeights()
         thresholds = MarkThresholds(gnn=threshold.model_threshold())
         marked = 0

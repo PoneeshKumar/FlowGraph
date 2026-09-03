@@ -11,7 +11,6 @@ const state = {
   elements: { nodes: [], edges: [] },
   total: null,                      // full account count, for the "N of M" readout
   cutoff: 0.74,                     // GNN mark cutoff (seeded from the model's tuned value)
-  head: null,                       // cached readout header (nodes/edges/overview)
 };
 
 const $ = (id) => document.getElementById(id);
@@ -65,8 +64,6 @@ function render(elements) {
   wireHover(cy);
   applyMarks();                       // recompute marked from the current cutoff
   renderLegend();
-  const t = elements.truncated || {};
-  state.head = { nN: elements.nodes.length, eN: elements.edges.length, truncated: t };
   renderReadout();
 }
 
@@ -90,15 +87,16 @@ function wireHover(cy) {
 
 function renderReadout() {
   const box = $('count-readout');
-  const h = state.head || { nN: 0, eN: 0, truncated: {} };
-  const t = h.truncated || {};
+  const els = state.elements || { nodes: [], edges: [], truncated: {} };
+  const nN = els.nodes.length, eN = els.edges.length;
+  const t = els.truncated || {};
   let head;
   if (state.view === 'overview' && t.total) {
-    head = `<b>${h.nN.toLocaleString()}</b> of ${t.total.toLocaleString()} accounts`
-      + ` · <b>${h.eN.toLocaleString()}</b> flows`
+    head = `<b>${nN.toLocaleString()}</b> of ${t.total.toLocaleString()} accounts`
+      + ` · <b>${eN.toLocaleString()}</b> flows`
       + `<span class="hint">top hubs — full graph too large to draw</span>`;
   } else {
-    head = `<b>${h.nN}</b> nodes · <b>${h.eN}</b> flows`;
+    head = `<b>${nN}</b> nodes · <b>${eN}</b> flows`;
   }
   // On the comparison tabs, quantify agreement in the current view (live marks).
   if (['marked', 'dataset', 'confirmed', 'compare'].includes(state.tab) && cy) {
@@ -126,6 +124,7 @@ function renderReadout() {
 
 // --- cutoff slider -------------------------------------------------------
 let _metricsTimer = null;
+let _cutoffPaintRaf = null;
 
 async function loadThresholdConfig() {
   try {
@@ -140,9 +139,16 @@ async function loadThresholdConfig() {
 function onCutoff(value, commit) {
   state.cutoff = Number(value);
   $('cutoff-val').textContent = state.cutoff.toFixed(2);
-  applyMarks();                                 // live recolour
-  cy && cy.style(V.styleForTab(state.tab, { labels: cy.nodes().length <= V.LABEL_LIMIT }));
-  renderReadout();                              // view-local counts
+  // 'input' can fire far faster than the screen repaints during a fast drag;
+  // coalesce the O(n) applyMarks + full restyle to at most once per frame.
+  if (_cutoffPaintRaf === null) {
+    _cutoffPaintRaf = requestAnimationFrame(() => {
+      _cutoffPaintRaf = null;
+      applyMarks();                                 // live recolour
+      cy && cy.style(V.styleForTab(state.tab, { labels: cy.nodes().length <= V.LABEL_LIMIT }));
+      renderReadout();                              // view-local counts
+    });
+  }
   if (commit) {                                 // whole-graph numbers on release (debounced)
     clearTimeout(_metricsTimer);
     _metricsTimer = setTimeout(() => fetchGlobalMetrics(state.cutoff), 150);
