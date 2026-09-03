@@ -32,6 +32,16 @@ class Settings(BaseSettings):
     MARK_GNN_THRESHOLD: float = 0.5
     CYCLE_MAX_SEEDS: int = 500
 
+    # --- Live per-event GNN scoring (outbox hook) ---
+    # Off by default: when enabled, each outbox sync cycle re-scores the accounts
+    # its events touched plus their bounded k-hop neighborhood. LIVE_SCORE_HOPS
+    # matches the champion depth (3); LIVE_MAX_AFFECTED caps the blast radius so a
+    # hub event can't cascade unbounded.
+    LIVE_SCORING_ENABLED: bool = False
+    LIVE_SCORE_HOPS: int = 3
+    LIVE_SCORE_FANOUT: int = 10
+    LIVE_MAX_AFFECTED: int = 300
+
     class Config:
         env_file = ".env"
         case_sensitive = True

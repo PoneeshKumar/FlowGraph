@@ -1,7 +1,6 @@
 """Tests for live per-event scoring assembly + orchestration."""
-import asyncio
-
 import numpy as np
+import pytest
 from unittest.mock import AsyncMock, MagicMock
 
 from app.services.incremental_scorer import (
@@ -54,7 +53,8 @@ def _neo4j(nodes, edges):
     return n
 
 
-def test_score_touched_writes_scores_and_seed_flags():
+@pytest.mark.asyncio
+async def test_score_touched_writes_scores_and_seed_flags():
     nodes = [_node("a"), _node("b"), _node("c")]
     edges = [_edge("a", "b"), _edge("b", "c")]
     neo4j = _neo4j(nodes, edges)
@@ -62,7 +62,7 @@ def test_score_touched_writes_scores_and_seed_flags():
     scorer = IncrementalScorer(neo4j, MagicMock(), pg, _scorer(0.7),
                                hops=3, fanout=10, max_affected=250)
 
-    mapping = asyncio.run(scorer.score_touched({"a", "b"}))
+    mapping = await scorer.score_touched({"a", "b"})
 
     # neighborhood exported with the seeds + caps
     args = neo4j.export_neighborhood.await_args.args
@@ -77,11 +77,12 @@ def test_score_touched_writes_scores_and_seed_flags():
     assert {"a", "b", "c"} <= set(mapping)
 
 
-def test_score_touched_noops_on_empty_and_missing():
+@pytest.mark.asyncio
+async def test_score_touched_noops_on_empty_and_missing():
     neo4j = _neo4j([], [])
     scorer = IncrementalScorer(neo4j, MagicMock(),
                                MagicMock(upsert_risk_flag=AsyncMock()), _scorer())
-    assert asyncio.run(scorer.score_touched([])) == {}       # no seeds
+    assert await scorer.score_touched([]) == {}              # no seeds
     neo4j.export_neighborhood.assert_not_awaited()
-    assert asyncio.run(scorer.score_touched({"x"})) == {}     # empty neighborhood
+    assert await scorer.score_touched({"x"}) == {}            # empty neighborhood
     neo4j.write_gnn_scores.assert_not_awaited()

@@ -39,12 +39,23 @@ Payment events → Kafka → Python consumer (Faust)
   documents it. Champion model config is `ml/runs/v10_L3` (regenerable — see
   *Artifacts & branch*); full numbers and methodology in `ml/RESULTS.md`.
 
-**Built but not wired into serving:**
-- The GNN is trained and scored **offline / batch** (`ml/predict.py`,
-  `ml/ensemble.py`) against a cached feature set. It is **not yet hooked into the
-  live pipeline** — nothing in the consumer/outbox path calls it per-event or
-  writes its scores back as risk flags. Wiring it into the risk-flag aggregator
-  is the main remaining integration task for this layer.
+**Serving paths (both built):**
+- **Batch / on-demand** — the GNN scores the whole graph against a cached feature
+  set (`ml/predict.py`, `ml/ensemble.py`), triggered by `/viz`'s "Run pipeline".
+- **Live per-event** (`LIVE_SCORING_ENABLED`, default off) — the outbox worker
+  re-scores the accounts each synced event touched **plus their bounded 3-hop
+  neighborhood** and writes scores back (`gnn_risk_score` + a `LIVE_GNN` risk
+  flag). Enabled by the inductive model (existing weights score new accounts, no
+  retrain). Pieces: `db/neo4j.py:export_neighborhood` (bounded k-hop export),
+  `ml/live_scorer.py:LiveScorer` (resident cached models), and
+  `app/services/incremental_scorer.py:IncrementalScorer` (assemble → score →
+  write-back), hooked in `worker/outbox_sync_worker.py` best-effort so scoring
+  never blocks the sync. **v1 caveats:** PageRank/Louvain use last-batch stored
+  props and the 12 Redis volume features are zeroed (`get_all_account_volumes` is a
+  whole-keyspace scan, too costly per event) — the GNN message passing over the
+  live graph structure is what's fresh, so a live score differs slightly from the
+  batch score by design. Next: reconstruct volumes from the neighborhood's known
+  edge ZSETs; time-bounded features.
 
 **Pipeline visualiser (`/viz`) — built on branch `feature/community-visualiser`:**
 - A standalone, FastAPI-served viewer at `/viz` (`app/viz/`) that surfaces the
@@ -372,7 +383,9 @@ for the GNN existing. **BIPARTITE (~12%) is the genuine hold-out** (see below).
 
 ## Worth doing next
 
-1. **Wire the GNN into serving** — the biggest gap: it is offline-only today.
+1. **Serving — done** (batch via `/viz` + opt-in live per-event via the outbox,
+   `LIVE_SCORING_ENABLED`). Next here: reconstruct live Redis volume features from
+   the neighborhood's edge ZSETs (v1 zeroes them) and time-bounded features.
 2. **Time-bounded features** so the temporal evaluation is real.
 3. **A larger dataset** (HI-Medium → evaluate on HI-Small) for more laundering
    examples — the remaining path past ~0.735 is data, not modelling.
