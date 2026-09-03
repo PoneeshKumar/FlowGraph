@@ -79,6 +79,50 @@ class TestOutboxSyncWorker:
         # Verify marked as synced
         mock_postgres_client.mark_outbox_synced.assert_called_once_with(1)
 
+    def _payment_record(self):
+        return {
+            "id": 1, "transaction_id": str(uuid4()), "idempotency_key": "k",
+            "event_payload": {
+                "event_id": str(uuid4()), "sender_id": "sender_123",
+                "receiver_id": "receiver_456", "amount_cents": 5000, "rail": "CARD",
+                "event_type": "AUTH", "timestamp_utc": datetime.now(timezone.utc).isoformat(),
+            },
+            "retry_count": 0, "last_retry_at": None,
+        }
+
+    @pytest.mark.asyncio
+    async def test_sync_cycle_scores_touched_accounts(
+        self, mock_postgres_client, mock_neo4j_client, mock_redis_client
+    ):
+        """When a scorer is wired, the cycle re-scores the accounts it synced."""
+        scorer = MagicMock(score_touched=AsyncMock())
+        worker = OutboxSyncWorker(
+            mock_postgres_client, mock_neo4j_client, mock_redis_client, scorer=scorer)
+        mock_postgres_client.fetch_pending_outbox.return_value = [self._payment_record()]
+        mock_neo4j_client.upsert_transaction_graph = AsyncMock()
+        mock_redis_client.add_edge_to_timeseries = AsyncMock()
+
+        await worker._sync_cycle()
+
+        scorer.score_touched.assert_awaited_once()
+        assert set(scorer.score_touched.await_args.args[0]) == {"sender_123", "receiver_456"}
+
+    @pytest.mark.asyncio
+    async def test_sync_cycle_scoring_failure_does_not_break_sync(
+        self, mock_postgres_client, mock_neo4j_client, mock_redis_client
+    ):
+        """A scoring exception is swallowed — the sync itself still completes."""
+        scorer = MagicMock(score_touched=AsyncMock(side_effect=RuntimeError("boom")))
+        worker = OutboxSyncWorker(
+            mock_postgres_client, mock_neo4j_client, mock_redis_client, scorer=scorer)
+        mock_postgres_client.fetch_pending_outbox.return_value = [self._payment_record()]
+        mock_neo4j_client.upsert_transaction_graph = AsyncMock()
+        mock_redis_client.add_edge_to_timeseries = AsyncMock()
+
+        await worker._sync_cycle()                       # must not raise
+
+        mock_postgres_client.mark_outbox_synced.assert_called_once_with(1)
+
     @pytest.mark.asyncio
     async def test_sync_cycle_does_not_recompute_pagerank_after_upsert(
         self, outbox_worker, mock_postgres_client, mock_neo4j_client, mock_redis_client
