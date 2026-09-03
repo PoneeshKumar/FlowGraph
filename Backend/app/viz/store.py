@@ -138,18 +138,20 @@ async def load_overview(session, *, metric: str = "pagerank", limit: int = 600):
 
 
 async def list_communities(session, sort: str = "risk", limit: int = 100, offset: int = 0):
+    from app.viz import threshold
+    cutoff = threshold.model_threshold()   # match _shape_record's tuned cutoff, not a blunt 0.5
     order = "risk_score DESC" if sort == "risk" else "size DESC"
     query = (
         "MATCH (a:Account) WHERE a.community_id IS NOT NULL "
         "WITH a.community_id AS cid, count(a) AS size, "
         "     avg(coalesce(a.gnn_risk_score, 0.0)) AS risk_score, "
-        "     sum(CASE WHEN a.in_cycle OR coalesce(a.gnn_risk_score, 0.0) >= 0.5 "
+        "     sum(CASE WHEN a.in_cycle OR coalesce(a.gnn_risk_score, 0.0) >= $cutoff "
         "         THEN 1 ELSE 0 END) AS flagged "
         "RETURN cid AS community_id, size, risk_score, flagged AS flagged_count "
         f"ORDER BY {order} SKIP $offset LIMIT $limit"
     )
     async with session() as s:
-        res = await s.run(query, offset=offset, limit=limit)
+        res = await s.run(query, offset=offset, limit=limit, cutoff=cutoff)
         rows = [dict(r) async for r in res]
     for r in rows:
         r["risk_tier"] = _tier(r.get("risk_score") or 0.0)

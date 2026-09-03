@@ -35,8 +35,8 @@ async def ensure_loaded(session) -> None:
     global _scores, _in_cycle, _labels
     if _scores is not None:
         return
-    query = ("MATCH (a:Account) WHERE a.gnn_risk_score IS NOT NULL "
-             "RETURN a.id AS id, a.gnn_risk_score AS sc, coalesce(a.in_cycle, false) AS ic")
+    query = ("MATCH (a:Account) WHERE a.gnn_risk_score IS NOT NULL OR a.in_cycle "
+             "RETURN a.id AS id, coalesce(a.gnn_risk_score, 0.0) AS sc, coalesce(a.in_cycle, false) AS ic")
     ids, sc, ic = [], [], []
     async with session() as s:
         res = await s.run(query)
