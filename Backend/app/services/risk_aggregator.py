@@ -1,4 +1,4 @@
-import Optional, Dict, Any
+from typing import Optional, Dict, Any
 from pydantic import BaseModel
 from app.db.neo4j import neo4j_client
 from app.services.ai_enrichment import AIEnrichmentService
