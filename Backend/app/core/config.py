@@ -22,7 +22,12 @@ class Settings(BaseSettings):
 
     # --- Community visualiser (/viz) ---
     GNN_RUN_DIR: str = "ml/runs/v10_L3"
-    GNN_ENSEMBLE_RUNS: List[str] = []
+    # Extra checkpoints averaged with GNN_RUN_DIR into a seed ensemble. Averaging
+    # cancels each model's idiosyncratic false positives: at matched recall (~0.55)
+    # this cuts whole-graph FP ~505→385 and lifts PR-AUC 0.687→0.710. Members that
+    # aren't present on disk are skipped (see PipelineRunner._gnn), so serving
+    # degrades gracefully to the single champion.
+    GNN_ENSEMBLE_RUNS: List[str] = ["ml/runs/v10_L3_s1", "ml/runs/v10_L3_s7"]
     GNN_FEATURE_CACHE: str = "ml/cache/featureset_v4.npz"
     MARK_GNN_THRESHOLD: float = 0.5
     CYCLE_MAX_SEEDS: int = 500

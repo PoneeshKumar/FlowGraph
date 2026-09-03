@@ -20,6 +20,31 @@ def test_stage_list():
 
 
 @pytest.mark.asyncio
+async def test_gnn_uses_present_ensemble_members_and_skips_missing():
+    # The ensemble members are optional artifacts — a member that isn't on disk
+    # must be dropped, so serving degrades to the champion instead of crashing.
+    neo4j = MagicMock(write_gnn_scores=AsyncMock())
+    pg = MagicMock(update_pipeline_run=AsyncMock())
+    s = _settings()
+    s.GNN_ENSEMBLE_RUNS = ["ml/runs/v10_L3_s1", "ml/runs/v10_L3_missing"]
+    feature_set = MagicMock(node_ids=["a", "b"])
+
+    def fake_exists(self):
+        return "missing" not in str(self)     # champion, cache, s1 exist; "_missing" doesn't
+
+    with patch("app.viz.runner.load_feature_cache", return_value=feature_set), \
+         patch("app.viz.runner.ensemble_scores", return_value=[0.9, 0.1]) as ES, \
+         patch("pathlib.Path.exists", fake_exists):
+        runner = PipelineRunner(neo4j, pg, s)
+        await runner._gnn("RID")
+
+    used = [d.name for d in ES.call_args[0][0]]
+    assert "v10_L3" in used and "v10_L3_s1" in used      # champion + present member
+    assert "v10_L3_missing" not in used                  # absent member dropped
+    neo4j.write_gnn_scores.assert_awaited_once()
+
+
+@pytest.mark.asyncio
 async def test_run_executes_all_stages_and_completes():
     neo4j = MagicMock(
         recompute_pagerank_full=AsyncMock(return_value=10),

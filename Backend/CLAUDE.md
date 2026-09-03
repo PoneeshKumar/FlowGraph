@@ -301,8 +301,19 @@ a random ranker; `precision@8` on the full graph is 100%.
 where ensembling *pays off*: full-batch seed-ensembles were a wash (+0.007,
 members near-identical), but mini-batch draws a fresh neighbourhood every step so
 seeds land on genuinely different functions and averaging cancels the variance.
-Cost is K× inference (offline/batch use); the single `v10_L3` is the deployable
-default. Gain saturates by 2 members.
+Cost is K× inference (offline/batch use). Gain saturates by 2 members.
+
+**The 3-seed ensemble is now the `/viz` serving default** (`GNN_ENSEMBLE_RUNS =
+[v10_L3_s1, v10_L3_s7]`). It was chosen specifically to cut false positives:
+because averaging cancels each seed's idiosyncratic FPs, at **matched recall it
+drops whole-graph FP ~24%** (e.g. recall 0.55: 507→385; recall 0.50: 320→253) and
+lifts PR-AUC 0.687→0.710. `PipelineRunner._gnn` skips any ensemble member absent
+from disk (`ml/runs` is gitignored), so serving degrades gracefully to the single
+`v10_L3` champion. The remaining FPs are **not separable by any cheap structural
+signal** — degree, community-periphery, PageRank and community-risk all fail to
+distinguish them from true frauds; only the GNN's own score separates them (FPs
+cluster just above the threshold, real frauds at high confidence). So FP
+reduction comes from a better score (ensemble / more data), not a post-filter.
 
 ### Recall by typology (whole graph, F1 threshold)
 
