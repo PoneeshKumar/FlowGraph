@@ -1,5 +1,5 @@
 # backend/app/api/endpoints.py
-from typing import Optional, Dict, Any
+from typing import Optional
 
 from fastapi import APIRouter, Query
 
