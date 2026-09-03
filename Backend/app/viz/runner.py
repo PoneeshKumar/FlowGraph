@@ -123,8 +123,11 @@ class PipelineRunner:
 
     async def _aggregate(self, run_id, gnn_scores, cycle_members):
         await self._mark(run_id, "aggregate", 0.9)
+        from app.viz import threshold, metrics
+        metrics.invalidate()                     # scores just changed — drop stale cache
+        threshold.invalidate()                    # pick up a hot-swapped run's tuned cutoff
         weights = MarkWeights()
-        thresholds = MarkThresholds(gnn=self.s.MARK_GNN_THRESHOLD)
+        thresholds = MarkThresholds(gnn=threshold.model_threshold())
         marked = 0
         # v1 boundary: community-tier signal is joined once persisted per-account;
         # marks here are driven by the GNN + cycle signals, which are correct.

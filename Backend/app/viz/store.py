@@ -75,8 +75,9 @@ def _shape_record(rec) -> Dict[str, Any]:
     objects, derives ``source``/``target`` from the relationship endpoints, and
     sets the ``marked`` flag (in a cycle, or GNN risk ≥ 0.5).
     """
-    from app.viz import truth
+    from app.viz import truth, threshold
     tset = truth.truth_set()
+    cutoff = threshold.model_threshold()   # the model's tuned cutoff, not a blunt 0.5
     nodes = [dict(n) for n in rec["nodes"]]
     rels = []
     for r in rec["rels"]:
@@ -85,7 +86,7 @@ def _shape_record(rec) -> Dict[str, Any]:
         rels.append({"source": r.start_node["id"], "target": r.end_node["id"], **dict(r)})
     for n in nodes:
         nid = n.get("id")
-        n["marked"] = bool(n.get("in_cycle")) or float(n.get("gnn_risk_score") or 0.0) >= 0.5
+        n["marked"] = threshold.is_marked(n.get("gnn_risk_score"), n.get("in_cycle"), cutoff)
         n["truth"] = nid in tset
         n["truth_typology"] = truth.typology_of(nid)
     return shape_elements(nodes, rels)
@@ -137,18 +138,20 @@ async def load_overview(session, *, metric: str = "pagerank", limit: int = 600):
 
 
 async def list_communities(session, sort: str = "risk", limit: int = 100, offset: int = 0):
+    from app.viz import threshold
+    cutoff = threshold.model_threshold()   # match _shape_record's tuned cutoff, not a blunt 0.5
     order = "risk_score DESC" if sort == "risk" else "size DESC"
     query = (
         "MATCH (a:Account) WHERE a.community_id IS NOT NULL "
         "WITH a.community_id AS cid, count(a) AS size, "
         "     avg(coalesce(a.gnn_risk_score, 0.0)) AS risk_score, "
-        "     sum(CASE WHEN a.in_cycle OR coalesce(a.gnn_risk_score, 0.0) >= 0.5 "
+        "     sum(CASE WHEN a.in_cycle OR coalesce(a.gnn_risk_score, 0.0) >= $cutoff "
         "         THEN 1 ELSE 0 END) AS flagged "
         "RETURN cid AS community_id, size, risk_score, flagged AS flagged_count "
         f"ORDER BY {order} SKIP $offset LIMIT $limit"
     )
     async with session() as s:
-        res = await s.run(query, offset=offset, limit=limit)
+        res = await s.run(query, offset=offset, limit=limit, cutoff=cutoff)
         rows = [dict(r) async for r in res]
     for r in rows:
         r["risk_tier"] = _tier(r.get("risk_score") or 0.0)

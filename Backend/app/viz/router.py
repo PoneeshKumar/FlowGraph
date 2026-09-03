@@ -7,7 +7,7 @@ from fastapi.responses import FileResponse
 
 from app.db.neo4j import neo4j_client          # app session, for graph reads
 from app.core.config import settings
-from app.viz import store, deps
+from app.viz import store, deps, metrics, threshold
 from app.viz.runner import PipelineRunner
 
 router = APIRouter()
@@ -56,6 +56,20 @@ async def subgraph(
 async def marked(sort: str = "score", signal: Optional[str] = None,
                  limit: int = Query(100, le=500), offset: int = 0):
     return await store.list_marked(deps.pg(), sort, signal, limit, offset)
+
+
+@router.get("/threshold")
+async def threshold_config():
+    """The model's tuned mark cutoff and the slider's bounds."""
+    return {"default": threshold.model_threshold(),
+            "min": threshold.MIN_CUTOFF, "max": threshold.MAX_CUTOFF}
+
+
+@router.get("/metrics")
+async def metrics_at(cutoff: float = Query(..., ge=0.0, le=1.0)):
+    """Whole-graph precision/recall/confusion at a given GNN cutoff."""
+    await metrics.ensure_loaded(_session())
+    return metrics.confusion_at(cutoff)
 
 
 @router.post("/run")

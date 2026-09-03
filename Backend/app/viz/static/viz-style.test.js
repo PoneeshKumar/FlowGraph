@@ -8,6 +8,14 @@ test('edgeWidth clamps to [1,10]', () => {
   assert.equal(V.edgeWidth(999), 10);
 });
 
+test('isMarked: cycle marks always, GNN marks at/above cutoff', () => {
+  assert.equal(V.isMarked({ in_cycle: true, gnn_risk_score: 0.1 }, 0.74), true);   // cycle wins
+  assert.equal(V.isMarked({ gnn_risk_score: 0.80 }, 0.74), true);                  // above cutoff
+  assert.equal(V.isMarked({ gnn_risk_score: 0.74 }, 0.74), true);                  // at cutoff
+  assert.equal(V.isMarked({ gnn_risk_score: 0.60 }, 0.74), false);                 // below cutoff
+  assert.equal(V.isMarked({ gnn_risk_score: null }, 0.74), false);                 // unscored
+});
+
 test('communityColor is stable and hex', () => {
   assert.equal(V.communityColor('c1'), V.communityColor('c1'));
   assert.match(V.communityColor('c1'), /^#[0-9a-fA-F]{6}$/);
