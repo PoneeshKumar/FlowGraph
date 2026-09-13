@@ -48,3 +48,16 @@ class AIReportResponse(BaseModel):
     explanation: str
     detected_typology: Optional[str]
     compliance_summary: str
+
+class BusinessSummaryRequest(BaseModel):
+    business_id: str = Field(..., min_length=1, max_length=128)
+    question: str = Field(..., min_length=1, max_length=1000)
+    risk_tier: str = Field(default="medium", pattern="^(low|medium|high|critical)$")
+    limit: int = Field(default=25, ge=1, le=100)
+
+class BusinessSummaryResponse(BaseModel):
+    business_id: str
+    question: str
+    summary: str
+    data: Dict[str, Any]
+    generated_by: str

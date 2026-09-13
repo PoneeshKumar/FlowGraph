@@ -1,6 +1,6 @@
 from typing import Optional
 
-from Backend.app.schemas.graph import GraphElements
+from app.schemas.graph import GraphElements
 from app.services.graph_service import GraphService
 from app.services.risk_aggregator import RiskAggregator, RiskVerdict
 
@@ -17,4 +17,11 @@ async def evaluate_risk(account_id: str, gnn_score: float, has_cycle: bool = Fal
 
 async def summarize_risky_applications(risk_tier: str = "high", limit: int = 100) -> dict:
     return await GraphService.get_risky_accounts(risk_tier=risk_tier, limit=limit)
+
+async def summarize_business(business_id: str, risk_tier: str = "medium", limit: int = 25) -> dict:
+    return await GraphService.get_business_risk_summary(
+        business_id=business_id,
+        risk_tier=risk_tier,
+        limit=limit,
+    )
 
