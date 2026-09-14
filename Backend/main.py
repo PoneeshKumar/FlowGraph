@@ -94,12 +94,31 @@ class FlowGraphBackend:
             # ==================== START BACKGROUND WORKERS ====================
             logger.info("Starting background workers...")
             
+            # Live per-event GNN scorer (opt-in): re-scores the accounts each
+            # sync cycle touched. Built once here so its models stay resident.
+            live_scorer = None
+            from app.core.config import settings as _s
+            if _s.LIVE_SCORING_ENABLED:
+                try:
+                    from ml.live_scorer import LiveScorer
+                    from app.services.incremental_scorer import IncrementalScorer
+                    live_scorer = IncrementalScorer(
+                        self.neo4j_client, self.redis_client, self.postgres_client,
+                        LiveScorer(_s.GNN_RUN_DIR, _s.GNN_ENSEMBLE_RUNS),
+                        hops=_s.LIVE_SCORE_HOPS, fanout=_s.LIVE_SCORE_FANOUT,
+                        max_affected=_s.LIVE_MAX_AFFECTED,
+                    )
+                    logger.info("Live per-event GNN scoring enabled")
+                except Exception as exc:  # missing checkpoint → run without live scoring
+                    logger.warning("Live scoring unavailable (%s); continuing batch-only", exc)
+
             # Outbox sync worker
             self.outbox_worker = OutboxSyncWorker(
                 postgres_client=self.postgres_client,
                 neo4j_client=self.neo4j_client,
                 redis_client=self.redis_client,
                 metrics_reporter=None,  # Will be set below
+                scorer=live_scorer,
             )
             
             # Metrics reporter

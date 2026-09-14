@@ -33,6 +33,7 @@ aiohttp==3.10.1
 # FastAPI serving layer (graph query API — app/api)
 fastapi==0.115.0
 pydantic-settings==2.4.0
+pydantic-ai>=0.0.14
 uvicorn[standard]==0.30.6
 
 # Logging utilities

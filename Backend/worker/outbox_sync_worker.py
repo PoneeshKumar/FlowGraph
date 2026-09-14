@@ -31,20 +31,25 @@ class OutboxSyncWorker:
         neo4j_client: Any,
         redis_client: Any,
         metrics_reporter: Optional[Any] = None,
+        scorer: Optional[Any] = None,
     ):
         """
         Initialize sync worker.
-        
+
         Args:
             postgres_client: PostgresClient instance
             neo4j_client: Neo4jClient instance
             redis_client: RedisClient instance
             metrics_reporter: Optional MetricsReporter instance
+            scorer: Optional IncrementalScorer. When set, each sync cycle
+                re-scores the accounts its synced events touched (best-effort —
+                scoring never blocks or fails the sync).
         """
         self.postgres = postgres_client
         self.neo4j = neo4j_client
         self.redis = redis_client
         self.metrics = metrics_reporter
+        self.scorer = scorer
         self.is_running = False
 
     async def sync_loop(self) -> None:
@@ -93,6 +98,7 @@ class OutboxSyncWorker:
             synced_count = 0
             failed_count = 0
             retried_count = 0
+            touched: set = set()          # accounts whose edges landed this cycle
 
             for record in pending_records:
                 try:
@@ -131,6 +137,8 @@ class OutboxSyncWorker:
                     # Mark as synced
                     await self.postgres.mark_outbox_synced(record["id"])
                     synced_count += 1
+                    touched.add(event_payload["sender_id"])
+                    touched.add(event_payload["receiver_id"])
                     
                     logger.debug(
                         f"Synced outbox record {record['id']} | "
@@ -172,6 +180,18 @@ class OutboxSyncWorker:
                     failed=failed_count,
                     retried=retried_count,
                 )
+
+            # Live per-event GNN re-scoring of the accounts this cycle touched.
+            # Best-effort: the graph is already consistent, so a scoring failure
+            # must never block or fail the sync (liveness over completeness).
+            if self.scorer is not None and touched:
+                try:
+                    await self.scorer.score_touched(touched)
+                except Exception as score_err:
+                    logger.warning(
+                        f"Live scoring failed for {len(touched)} touched account(s): "
+                        f"{score_err}"
+                    )
 
         except Exception as e:
             logger.error(f"Error in sync cycle: {e}", exc_info=True)

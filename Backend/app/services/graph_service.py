@@ -16,6 +16,122 @@ class GraphService:
         return "low"
 
     @classmethod
+    async def get_risky_accounts(
+        cls,
+        risk_tier: str = "high",
+        limit: int = 100,
+    ) -> Dict[str, Any]:
+        tier_thresholds = {"low": 0.0, "medium": 0.40, "high": 0.50, "critical": 0.75}
+        if risk_tier not in tier_thresholds:
+            raise ValueError("risk_tier must be one of: low, medium, high, critical")
+
+        safe_limit = min(max(int(limit), 1), 500)
+        included_tiers = {
+            "low": ["low", "medium", "high", "critical"],
+            "medium": ["medium", "high", "critical"],
+            "high": ["high", "critical"],
+            "critical": ["critical"],
+        }[risk_tier]
+        query = """
+        MATCH (a:Account)
+        WITH a,
+             coalesce(a.risk_score, a.gnn_risk_score, 0.0) AS score,
+             coalesce(a.risk_tier, a.gnn_risk_tier, "low") AS tier
+        WHERE score >= $score_threshold
+           OR tier IN $included_tiers
+           OR coalesce(a.in_cycle, false) = true
+          ORDER BY score DESC, a.id
+        WITH count(*) AS total, collect({
+            account_id: a.id,
+            label: coalesce(a.label, a.id),
+            risk_score: score,
+            risk_tier: tier,
+            in_cycle: coalesce(a.in_cycle, false),
+            community_id: a.community_id
+        }) AS accounts
+        RETURN total, accounts[..$limit] AS accounts
+        """
+
+        async with neo4j_client.driver.session() as session:
+            result = await session.run(
+                query,
+                score_threshold=tier_thresholds[risk_tier],
+                included_tiers=included_tiers,
+                limit=safe_limit,
+            )
+            record = await result.single()
+
+        if not record:
+            return {"total": 0, "accounts": []}
+        return {"total": record["total"], "accounts": list(record["accounts"])}
+
+    @classmethod
+    async def get_business_risk_summary(
+        cls,
+        business_id: str,
+        risk_tier: str = "medium",
+        limit: int = 25,
+    ) -> Dict[str, Any]:
+        tier_thresholds = {"low": 0.0, "medium": 0.40, "high": 0.50, "critical": 0.75}
+        if risk_tier not in tier_thresholds:
+            raise ValueError("risk_tier must be one of: low, medium, high, critical")
+
+        safe_limit = min(max(int(limit), 1), 100)
+        query = """
+        MATCH (a:Account {business_id: $business_id})
+        WITH a,
+             coalesce(a.risk_score, a.gnn_risk_score, 0.0) AS score,
+             coalesce(a.risk_tier, a.gnn_risk_tier, "low") AS tier
+        WITH collect({
+            account_id: a.id,
+            label: coalesce(a.label, a.id),
+            risk_score: score,
+            risk_tier: tier,
+            in_cycle: coalesce(a.in_cycle, false),
+            community_id: a.community_id
+        }) AS accounts,
+        count(*) AS total,
+        sum(CASE WHEN score >= $score_threshold OR tier IN $included_tiers
+                 OR coalesce(a.in_cycle, false) = true THEN 1 ELSE 0 END) AS risky_total,
+        avg(score) AS average_risk_score
+        RETURN total, risky_total, average_risk_score,
+               [account IN accounts WHERE account.risk_score >= $score_threshold
+                 OR account.risk_tier IN $included_tiers OR account.in_cycle = true][..$limit] AS risky_accounts
+        """
+        included_tiers = {
+            "low": ["low", "medium", "high", "critical"],
+            "medium": ["medium", "high", "critical"],
+            "high": ["high", "critical"],
+            "critical": ["critical"],
+        }[risk_tier]
+
+        async with neo4j_client.driver.session() as session:
+            result = await session.run(
+                query,
+                business_id=business_id,
+                score_threshold=tier_thresholds[risk_tier],
+                included_tiers=included_tiers,
+                limit=safe_limit,
+            )
+            record = await result.single()
+
+        if not record:
+            return {
+                "business_id": business_id,
+                "total_accounts": 0,
+                "risky_accounts": 0,
+                "average_risk_score": 0.0,
+                "accounts": [],
+            }
+        return {
+            "business_id": business_id,
+            "total_accounts": record["total"],
+            "risky_accounts": record["risky_total"],
+            "average_risk_score": float(record["average_risk_score"] or 0.0),
+            "accounts": list(record["risky_accounts"] or []),
+        }
+
+    @classmethod
     async def get_subgraph(cls, account_id: str, depth: int = 2, limit: int = 100) -> GraphElements:
         query = """
         MATCH (start:Account {id: $account_id})

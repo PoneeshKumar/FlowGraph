@@ -28,6 +28,17 @@ export const apiClient = {
     const { data } = await axios.get(`${API_BASE}/accounts/${accountId}/enrich`);
     return data;
   },
+
+  getBusinessSummary: async (businessId, question, options = {}) => {
+    const { data } = await axios.post(`${API_BASE}/agent/business-summary`, {
+      business_id: businessId,
+      question,
+      risk_tier: options.riskTier ?? 'medium',
+      limit: options.limit ?? 25,
+    });
+    return data;
+  },
+
   evaluateRisk: async (accountId, params = {}) => {
     const { data } = await axios.post(
       `${API_BASE}/risk/evaluate/${accountId}`,
