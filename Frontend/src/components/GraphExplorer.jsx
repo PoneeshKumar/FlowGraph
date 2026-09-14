@@ -9,6 +9,11 @@ export default function GraphExplorer({ onNav, navContext }) {
   const [searchAccount, setSearchAccount] = useState('');
   const [depth, setDepth] = useState(2);
   const [loading, setLoading] = useState(false);
+  const [businessId, setBusinessId] = useState('');
+  const [businessQuestion, setBusinessQuestion] = useState('What are the most important risk concerns?');
+  const [businessSummary, setBusinessSummary] = useState(null);
+  const [summaryLoading, setSummaryLoading] = useState(false);
+  const [summaryError, setSummaryError] = useState('');
 
   const fetchGraph = useCallback(async (accountId, hopDepth) => {
     if (!accountId) return;
@@ -39,6 +44,26 @@ export default function GraphExplorer({ onNav, navContext }) {
     e.preventDefault();
     if (searchAccount.trim()) {
       fetchGraph(searchAccount, depth);
+    }
+  };
+
+  const handleBusinessSummary = async (e) => {
+    e.preventDefault();
+    if (!businessId.trim() || !businessQuestion.trim()) return;
+
+    setSummaryLoading(true);
+    setSummaryError('');
+    try {
+      const data = await apiClient.getBusinessSummary(
+        businessId.trim(),
+        businessQuestion.trim(),
+      );
+      setBusinessSummary(data);
+    } catch (err) {
+      setBusinessSummary(null);
+      setSummaryError(err.response?.data?.detail || 'Unable to generate a business summary.');
+    } finally {
+      setSummaryLoading(false);
     }
   };
 
@@ -89,6 +114,49 @@ export default function GraphExplorer({ onNav, navContext }) {
             </button>
           </form>
         </header>
+        <section className="border-b border-slate-800 bg-slate-900/60 px-6 py-3">
+          <form onSubmit={handleBusinessSummary} className="flex items-end gap-3">
+            <label className="w-56">
+              <span className="mb-1 block text-[10px] font-semibold uppercase tracking-wider text-slate-500">
+                Business ID
+              </span>
+              <input
+                type="text"
+                placeholder="business-001"
+                value={businessId}
+                onChange={(e) => setBusinessId(e.target.value)}
+                className="w-full rounded border border-slate-700 bg-slate-950 px-3 py-2 text-xs font-mono text-slate-200 focus:border-sky-500 focus:outline-none"
+              />
+            </label>
+            <label className="min-w-0 flex-1">
+              <span className="mb-1 block text-[10px] font-semibold uppercase tracking-wider text-slate-500">
+                Ask the AI about this business
+              </span>
+              <input
+                type="text"
+                value={businessQuestion}
+                onChange={(e) => setBusinessQuestion(e.target.value)}
+                className="w-full rounded border border-slate-700 bg-slate-950 px-3 py-2 text-xs text-slate-200 focus:border-sky-500 focus:outline-none"
+              />
+            </label>
+            <button
+              type="submit"
+              disabled={summaryLoading || !businessId.trim() || !businessQuestion.trim()}
+              className="rounded bg-amber-600 px-3.5 py-2 text-xs font-semibold text-white transition-colors hover:bg-amber-500 disabled:bg-slate-800 disabled:text-slate-500"
+            >
+              {summaryLoading ? 'Analyzing...' : 'Ask AI'}
+            </button>
+          </form>
+          {summaryError && <p className="mt-2 text-xs text-red-400">{summaryError}</p>}
+          {businessSummary && (
+            <div className="mt-3 max-w-4xl border-l-2 border-amber-500 pl-3">
+              <p className="text-[10px] font-semibold uppercase tracking-wider text-amber-400">
+                Business {businessSummary.business_id} · {businessSummary.generated_by}
+              </p>
+              <p className="mt-1 text-sm leading-relaxed text-slate-200">{businessSummary.summary}</p>
+            </div>
+          )}
+        </section>
         <div className="flex-1 relative min-h-0">
           <GraphCanvas elements={elements} onSelectNode={setSelectedNode} />
 

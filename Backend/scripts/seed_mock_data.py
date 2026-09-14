@@ -7,6 +7,7 @@ NEO4J_URI = "bolt://localhost:7687"
 NEO4J_USER = "neo4j"
 NEO4J_PASSWORD = "changeme"
 REDIS_URL = "redis://localhost:6379/0"
+MOCK_BUSINESS_ID = "mock-business-001"
 
 # Mock dataset covering distinct AML topologies
 MOCK_ACCOUNTS = [
@@ -63,7 +64,11 @@ async def seed_data():
     print("Connecting and cleaning existing test nodes...")
     async with driver.session() as session:
         # Clear mock nodes if present
-        await session.run("MATCH (n:Account) WHERE n.id STARTS WITH 'acc_' DETACH DELETE n")
+        await session.run(
+            "MATCH (n:Account) WHERE n.id STARTS WITH 'acc_' "
+            "OR n.business_id = $business_id DETACH DELETE n",
+            business_id=MOCK_BUSINESS_ID,
+        )
 
         # 1. Upsert Nodes
         for acc in MOCK_ACCOUNTS:
@@ -72,10 +77,11 @@ async def seed_data():
             SET a.label = $label,
                 a.risk_score = $risk_score,
                 a.node_type = $node_type,
+                a.business_id = $business_id,
                 a.community_id = 101,
                 a.pagerank_score = 0.045
             """
-            await session.run(query, **acc)
+            await session.run(query, **acc, business_id=MOCK_BUSINESS_ID)
 
         # 2. Upsert FLOWS_TO Edges in Neo4j
         for flow in MOCK_FLOWS:
