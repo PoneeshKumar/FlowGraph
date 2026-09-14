@@ -1,5 +1,5 @@
 # backend/app/api/endpoints.py
-from typing import Optional
+from typing import Optional, Dict, Any
 
 from fastapi import APIRouter, Query
 from app.services.graph_service import GraphService
