@@ -12,7 +12,7 @@ from app.api.endpoints import router as api_router
 from app.db.neo4j import neo4j_client
 from app.db.redis import redis_pool
 from app.services import stats_service
-from app.viz.router import router as viz_router
+from app.viz.router import router as viz_router, api as viz_api_router
 from app.viz import deps as viz_deps
 
 @asynccontextmanager
@@ -42,6 +42,7 @@ app.add_middleware(
 
 app.include_router(api_router, prefix=settings.API_V1_STR)
 app.include_router(viz_router, prefix="/viz")
+app.include_router(viz_api_router, prefix="/api/pipeline")   # same JSON, one base URL for the frontend
 app.mount(
     "/viz/static",
     StaticFiles(directory=Path(__file__).parent.parent / "viz" / "static"),
