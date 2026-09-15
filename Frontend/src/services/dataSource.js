@@ -71,6 +71,20 @@ export function createLiveSource(baseUrl) {
       latestRun: () => get('/pipeline/run/latest'),
     },
     system: { llm: () => get('/system/llm') },
+    datasets: {
+      current: () => get('/datasets/current'),
+      templateUrl: () => `${base}/datasets/template`,
+      upload: ({ transactions, patterns }, onProgress) => {
+        const fd = new FormData()
+        fd.append('transactions', transactions)
+        if (patterns) fd.append('patterns', patterns)
+        fd.append('confirm', 'replace')
+        return http.post('/datasets/upload', fd, {
+          timeout: 0,
+          onUploadProgress: e => onProgress?.(e.total ? e.loaded / e.total : 0),
+        }).then(r => r.data)
+      },
+    },
   }
 }
 
@@ -173,5 +187,10 @@ export function createSnapshotSource(loader = defaultLoader) {
       latestRun: () => need('pipeline/latest_run.json', 'Run status'),
     },
     system: { llm: () => load('llm.json').then(v => v || { provider: 'none', model: null, reachable: false }) },
+    datasets: {
+      current: () => load('meta.json').then(m => m?.dataset ?? null),
+      templateUrl: () => null,
+      upload: unsupported('Uploading a dataset'),
+    },
   }
 }

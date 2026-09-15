@@ -50,4 +50,10 @@ describe('createSnapshotSource', () => {
     expect((await src.pipeline.communities({ sort: 'size' }))[0].community_id).toBe('d')
     expect((await src.pipeline.metrics(0.65)).precision).toBeCloseTo(0.6)
   })
+  it('exposes the dataset from meta and rejects uploads', async () => {
+    const s2 = createSnapshotSource(path => Promise.resolve({ 'meta.json': { dataset: { name: 'T' } } }[path]))
+    expect((await s2.datasets.current()).name).toBe('T')
+    expect(s2.datasets.templateUrl()).toBeNull()
+    await expect(s2.datasets.upload({})).rejects.toBeInstanceOf(NotInSnapshotError)
+  })
 })
