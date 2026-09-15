@@ -1,47 +1,23 @@
-import { useState, useEffect } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import { LayoutGroup, motion, AnimatePresence } from 'motion/react'
-import { RECENT_ALERTS } from '../data/mockData'
-import { RISK_VAR, PageHeader, useToast } from './ui'
+import { RISK_VAR, PageHeader, useToast, Skeleton, ErrorNote, EmptyNote } from './ui'
+import { useDataSource } from '../services/DataSourceProvider'
+import { useAsync } from '../hooks/useAsync'
+import { flagLabel, fmtIso, shortId } from '../lib/format'
 
-const MORE_ALERTS = [
-  ...RECENT_ALERTS,
-  {
-    id: 'ALT-006', severity: 'medium', type: 'Velocity Anomaly',
-    message: 'BNK-1102 sent 12 transactions in 30 min — 6× baseline',
-    account: 'BNK-1102', amount: 380000, timestamp: '2 hr ago', confidence: 68,
-    aiExplanation: 'Transaction velocity for BNK-1102 is 6× its 30-day average. No prior suspicious activity on record, but pattern warrants monitoring.',
-  },
-  {
-    id: 'ALT-007', severity: 'low', type: 'New Account Flag',
-    message: 'EXC-0044 — created 6 days ago, already $1.55M in volume',
-    account: 'EXC-0044', amount: 1550000, timestamp: '3 hr ago', confidence: 55,
-    aiExplanation: 'EXC-0044 was created 6 days ago and has already processed $1.55M in transactions. Rapid ramp-up is a soft signal for shell account behavior.',
-  },
-]
-
-const FILTERS = ['all', 'critical', 'high', 'medium', 'low']
+const LEVELS = ['all', 'critical', 'high', 'medium', 'low']
+const TYPES = ['ALL', 'AGGREGATE', 'COMMUNITY', 'CYCLE', 'LIVE_GNN']
+const PAGE = 50
 
 const ACTIONS = [
-  {
-    label: 'Freeze account',
-    tone: 'text-critical hover:opacity-80',
-    message: alert => `${alert.account} flagged for review`,
-  },
-  {
-    label: 'Escalate',
-    tone: 'text-high hover:opacity-80',
-    message: () => 'Alert escalated to tier-2',
-  },
-  {
-    label: 'False positive',
-    tone: 'text-ink-3 hover:text-ink-2',
-    message: () => 'Marked as false positive',
-  },
+  { label: 'Escalate',       status: 'escalated', tone: 'text-critical hover:opacity-80' },
+  { label: 'Mark reviewed',  status: 'reviewed',  tone: 'text-high hover:opacity-80' },
+  { label: 'Dismiss',        status: 'dismissed', tone: 'text-ink-3 hover:text-ink-2' },
 ]
 
-function AlertRow({ alert, isOpen, onToggle, onAction }) {
-  const color = RISK_VAR[alert.severity]
-
+function AlertRow({ alert, isOpen, onToggle, onAction, onOpenGraph }) {
+  const color = RISK_VAR[alert.risk_level]
+  const signals = Object.entries(alert.details?.signals || {}).filter(([, v]) => v).map(([k]) => k)
   return (
     <article className="py-5">
       <button type="button" onClick={onToggle} className="w-full cursor-pointer text-left">
@@ -49,15 +25,15 @@ function AlertRow({ alert, isOpen, onToggle, onAction }) {
           <span className="mt-2 h-[6px] w-[6px] shrink-0 rounded-full" style={{ background: color }} />
           <div className="min-w-0 flex-1">
             <div className="flex flex-wrap items-baseline gap-x-3 gap-y-0.5">
-              <span className="text-[14px] font-semibold text-ink">{alert.type}</span>
-              <span className="text-[11px] font-bold uppercase tracking-[0.06em]" style={{ color }}>
-                {alert.severity}
-              </span>
-              <span className="font-mono text-[11px] text-ink-4">{alert.timestamp}</span>
+              <span className="text-[14px] font-semibold text-ink">{flagLabel(alert.flag_type)}</span>
+              <span className="text-[11px] font-bold uppercase tracking-[0.06em]" style={{ color }}>{alert.risk_level}</span>
+              <span className="font-mono text-[11px] text-ink-4">{fmtIso(alert.last_detected_at)}</span>
+              {alert.status !== 'open' && <span className="font-mono text-[10px] uppercase text-ink-4">{alert.status}</span>}
             </div>
-            <p className="mt-1.5 text-[14px] leading-relaxed text-ink-2">{alert.message}</p>
+            <p className="mt-1.5 text-[14px] leading-relaxed text-ink-2">{alert.explanation}</p>
             <p className="mt-2 font-mono text-[12px] text-ink-3 tnum">
-              {alert.account} · ${(alert.amount / 1000).toFixed(0)}K · {alert.confidence}% confidence
+              {shortId(alert.primary_account)}{alert.account_ids.length > 1 ? ` +${alert.account_ids.length - 1} accounts` : ''}
+              {' · '}score {(alert.risk_score * 100).toFixed(0)}%{alert.detection_count > 1 ? ` · seen ${alert.detection_count}×` : ''}
             </p>
           </div>
         </div>
@@ -65,33 +41,25 @@ function AlertRow({ alert, isOpen, onToggle, onAction }) {
 
       <AnimatePresence initial={false}>
         {isOpen && (
-          <motion.div
-            initial={{ height: 0, opacity: 0 }}
-            animate={{ height: 'auto', opacity: 1 }}
-            exit={{ height: 0, opacity: 0 }}
-            transition={{ duration: 0.4, ease: [0.22, 1, 0.36, 1] }}
-            className="overflow-hidden"
-          >
+          <motion.div initial={{ height: 0, opacity: 0 }} animate={{ height: 'auto', opacity: 1 }} exit={{ height: 0, opacity: 0 }}
+            transition={{ duration: 0.4, ease: [0.22, 1, 0.36, 1] }} className="overflow-hidden">
             <div className="ml-[18px] mt-4 max-w-3xl">
               <p className="text-[10px] font-bold uppercase tracking-[0.1em] text-ink-4">
-                AI analysis · <span className="font-mono font-normal normal-case">{alert.id}</span>
+                Signals · <span className="font-mono font-normal normal-case">#{alert.id}</span>
               </p>
-              <p className="mt-2 text-[14px] leading-[1.75] text-ink-2">{alert.aiExplanation}</p>
-
+              <div className="mt-2 flex flex-wrap gap-2">
+                {signals.length === 0 && <span className="text-[12px] text-ink-4">no structured signals recorded</span>}
+                {signals.map(s => <span key={s} className="rounded bg-hover px-2 py-0.5 font-mono text-[11px] text-ink-2">{s}</span>)}
+                {alert.details?.gnn_score != null && <span className="rounded bg-hover px-2 py-0.5 font-mono text-[11px] text-ink-2">gnn {Number(alert.details.gnn_score).toFixed(3)}</span>}
+                {alert.details?.community_id && <span className="rounded bg-hover px-2 py-0.5 font-mono text-[11px] text-ink-2">community {alert.details.community_id}</span>}
+              </div>
               <div className="mt-4 flex flex-wrap items-center gap-5">
-                {ACTIONS.map(btn => (
-                  <button
-                    key={btn.label}
-                    type="button"
-                    onClick={e => {
-                      e.stopPropagation()
-                      onAction(btn.message(alert))
-                    }}
-                    className={`text-[13px] font-medium ${btn.tone}`}
-                  >
-                    {btn.label}
-                  </button>
+                {ACTIONS.map(a => (
+                  <button key={a.status} type="button" onClick={e => { e.stopPropagation(); onAction(alert, a.status) }}
+                    className={`text-[13px] font-medium ${a.tone}`}>{a.label}</button>
                 ))}
+                <button type="button" onClick={e => { e.stopPropagation(); onOpenGraph(alert.primary_account) }}
+                  className="ml-auto text-[13px] font-medium text-accent hover:opacity-70">Open in Graph →</button>
               </div>
             </div>
           </motion.div>
@@ -101,121 +69,85 @@ function AlertRow({ alert, isOpen, onToggle, onAction }) {
   )
 }
 
-function FilterableAlertRow({ alert, visible, isOpen, onToggle, onAction }) {
-  return (
-    <motion.div
-      id={`alert-${alert.id}`}
-      layout="position"
-      initial={false}
-      animate={{
-        opacity: visible ? 1 : 0,
-        gridTemplateRows: visible ? '1fr' : '0fr',
-        borderBottomColor: visible ? 'var(--line)' : 'transparent',
-      }}
-      transition={{
-        opacity: { duration: 0.18 },
-        gridTemplateRows: { duration: 0.38, ease: [0.22, 1, 0.36, 1] },
-        layout: { duration: 0.38, ease: [0.22, 1, 0.36, 1] },
-      }}
-      className="grid border-b border-line/70 last:border-b-0"
-      aria-hidden={!visible}
-      style={{ pointerEvents: visible ? undefined : 'none' }}
-    >
-      <div className="overflow-hidden">
-        <AlertRow alert={alert} isOpen={isOpen} onToggle={onToggle} onAction={onAction} />
-      </div>
-    </motion.div>
-  )
-}
-
-export default function AlertsView({ navContext }) {
-  const navAlertId = navContext?.alertId ?? null
-  const [userFilter, setUserFilter] = useState('all')
-  const [userOpenId, setUserOpenId] = useState(null)
+export default function AlertsView({ onNav, params }) {
+  const { source, mode } = useDataSource()
+  const [level, setLevel] = useState('all')
+  const [type, setType] = useState('ALL')
+  const [page, setPage] = useState(0)
+  const [openId, setOpenId] = useState(params?.id ? Number(params.id) : null)
+  const [local, setLocal] = useState({})            // id → status after an action
   const { show, ToastHost } = useToast()
 
-  const filter = navAlertId ? 'all' : userFilter
-  const openId = navAlertId ?? userOpenId
+  const query = useMemo(() => ({
+    flag_type: type === 'ALL' ? undefined : type,
+    min_level: level === 'all' ? 'low' : level,
+    limit: PAGE, offset: page * PAGE,
+  }), [type, level, page])
+  const q = useAsync(() => source.alerts.list(query), [source.mode, query])
 
   useEffect(() => {
-    if (!navAlertId) return
-    if (!MORE_ALERTS.some(a => a.id === navAlertId)) return
+    if (!params?.id) return
+    const t = window.setTimeout(() => document.getElementById(`alert-${params.id}`)?.scrollIntoView({ block: 'center', behavior: 'smooth' }), 150)
+    return () => window.clearTimeout(t)
+  }, [params?.id, q.data])
 
-    const scrollTimer = window.setTimeout(() => {
-      document.getElementById(`alert-${navAlertId}`)?.scrollIntoView({ block: 'center', behavior: 'smooth' })
-    }, 120)
+  const items = (q.data?.items ?? []).filter(a => level === 'all' || a.risk_level === level)
+  const total = q.data?.total ?? 0
+  const pages = Math.max(1, Math.ceil(total / PAGE))
 
-    return () => window.clearTimeout(scrollTimer)
-  }, [navAlertId])
-
-  const filtered = MORE_ALERTS.filter(a => filter === 'all' || a.severity === filter)
-  const counts = MORE_ALERTS.reduce((acc, a) => { acc[a.severity] = (acc[a.severity] || 0) + 1; return acc }, {})
-
-  const handleFilter = (next) => {
-    setUserFilter(next)
-    setUserOpenId(prev => {
-      if (prev == null) return null
-      const stillVisible = MORE_ALERTS.some(
-        a => a.id === prev && (next === 'all' || a.severity === next),
-      )
-      return stillVisible ? prev : null
-    })
+  const act = async (alert, status) => {
+    try {
+      await source.alerts.setStatus(alert.id, status)
+      setLocal(l => ({ ...l, [alert.id]: status }))
+      show(mode === 'demo' ? `Marked ${status} (demo — not persisted)` : `Alert #${alert.id} marked ${status}`)
+    } catch (e) {
+      show(e?.message || 'Update failed')
+    }
   }
 
   return (
     <div className="flex h-full flex-col overflow-hidden">
-      <PageHeader title="Risk Alerts" subtitle="AI-generated explanations for every flag">
-        <button type="button" className="text-[13px] font-medium text-ink-3 transition-colors hover:text-ink">
-          Export report
-        </button>
+      <PageHeader title="Risk Alerts" subtitle="Every flag carries a written reason — a regulatory requirement, not a nicety">
+        <span className="font-mono text-[12px] text-ink-3 tnum">{total.toLocaleString()} open</span>
       </PageHeader>
 
-      {/* Text-only filters */}
       <div className="flex shrink-0 flex-wrap items-center gap-x-5 gap-y-2 px-8 pb-4">
-        {FILTERS.map(f => {
-          const isActive = filter === f
-          const count = f === 'all' ? MORE_ALERTS.length : counts[f] || 0
-          const color = f === 'all' ? undefined : RISK_VAR[f]
-          return (
-            <button
-              key={f}
-              type="button"
-              onClick={() => handleFilter(f)}
-              className={`flex items-center gap-1.5 text-[13px] capitalize transition-colors
-                ${isActive ? 'font-semibold text-ink' : 'text-ink-3 hover:text-ink-2'}`}
-              style={isActive && color ? { color } : undefined}
-            >
-              {f}
-              <span className="font-mono text-[11px] tnum opacity-60">{count}</span>
-            </button>
-          )
-        })}
-        <span className="ml-auto text-[12px] text-ink-4 tnum">
-          {filtered.length} of {MORE_ALERTS.length}
-        </span>
+        {LEVELS.map(f => (
+          <button key={f} type="button" onClick={() => { setLevel(f); setPage(0) }}
+            className={`text-[13px] capitalize transition-colors ${level === f ? 'font-semibold text-ink' : 'text-ink-3 hover:text-ink-2'}`}
+            style={level === f && f !== 'all' ? { color: RISK_VAR[f] } : undefined}>{f}</button>
+        ))}
+        <span className="text-ink-4">·</span>
+        {TYPES.map(t => (
+          <button key={t} type="button" onClick={() => { setType(t); setPage(0) }}
+            className={`text-[12px] transition-colors ${type === t ? 'font-semibold text-ink' : 'text-ink-3 hover:text-ink-2'}`}>
+            {t === 'ALL' ? 'All types' : flagLabel(t)}
+          </button>
+        ))}
+        <span className="ml-auto text-[12px] text-ink-4 tnum">page {page + 1} of {pages}</span>
       </div>
 
-      {/* Feed — collapse non-matching rows in place; layout animates the reflow */}
       <div className="flex-1 overflow-y-auto px-8">
-        <LayoutGroup>
-          <motion.div layout className="overflow-hidden">
-            {MORE_ALERTS.map(alert => {
-              const visible = filter === 'all' || alert.severity === filter
-              return (
-                <FilterableAlertRow
-                  key={alert.id}
-                  alert={alert}
-                  visible={visible}
-                  isOpen={visible && openId === alert.id}
-                  onToggle={() => setUserOpenId(prev => (prev === alert.id ? null : alert.id))}
-                  onAction={show}
-                />
-              )
-            })}
-          </motion.div>
-        </LayoutGroup>
+        {q.error ? <ErrorNote error={q.error} onRetry={q.reload} />
+          : q.loading ? <div className="space-y-4 py-4"><Skeleton className="h-16 w-full" /><Skeleton className="h-16 w-full" /><Skeleton className="h-16 w-full" /></div>
+          : items.length === 0 ? <EmptyNote>No alerts match these filters.</EmptyNote> : (
+          <LayoutGroup>
+            <motion.div layout className="divide-y divide-line/70">
+              {items.map(alert => (
+                <div key={alert.id} id={`alert-${alert.id}`}>
+                  <AlertRow alert={{ ...alert, status: local[alert.id] ?? alert.status }} isOpen={openId === alert.id}
+                    onToggle={() => setOpenId(prev => (prev === alert.id ? null : alert.id))}
+                    onAction={act} onOpenGraph={(acct) => onNav('graph', { account: acct })} />
+                </div>
+              ))}
+            </motion.div>
+          </LayoutGroup>
+        )}
+        <div className="flex items-center justify-end gap-3 py-4 text-[12px]">
+          <button type="button" disabled={page === 0} onClick={() => setPage(p => p - 1)} className="text-ink-3 hover:text-ink disabled:opacity-40">← Newer</button>
+          <button type="button" disabled={page + 1 >= pages} onClick={() => setPage(p => p + 1)} className="text-ink-3 hover:text-ink disabled:opacity-40">Older →</button>
+        </div>
       </div>
-
       <ToastHost />
     </div>
   )
