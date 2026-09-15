@@ -75,6 +75,8 @@ function toChartSeries(s, period) {
     baseline: s.baseline.map(v => v / 1e6),
     txns,
     end: s.anchor_ts,
+    // one axis tick per day (7d: 6 h buckets) or per 3 h (24h: 30 min buckets)
+    ticks: period === '7d' ? 8 : period === '24h' ? 9 : 12,
   }
 }
 
@@ -102,8 +104,9 @@ function buildPath(values, width, height, padY = 8) {
   return { line, area, pts }
 }
 
+/** value in millions → "97.23M" or "262.88B". */
 function fmtVolumeM(v) {
-  return `${v.toFixed(2)}M`
+  return Math.abs(v) >= 1000 ? `${(v / 1000).toFixed(2)}B` : `${v.toFixed(2)}M`
 }
 
 function buildRangeInfo(series, startIdx, endIdx) {
@@ -445,7 +448,7 @@ function VolumeChart({ series, onHover, onSelect }) {
       </div>
 
       <div className="mt-1 flex justify-between px-0.5 font-mono text-[10px] text-ink-4 tnum">
-        {tickIndices(series.labels.length).map(i => (
+        {tickIndices(series.labels.length, series.ticks).map(i => (
           <span key={`${i}-${series.labels[i]}`} className={hoverIndex === i ? 'font-semibold text-ink' : undefined}>
             {series.labels[i]}
           </span>
@@ -624,7 +627,7 @@ export default function Dashboard({ onNav }) {
           <div>
             <p className="text-[13px] text-ink-3">{heroLabel}</p>
             <div className="mt-1 flex flex-wrap items-baseline gap-3">
-              <RollingNumber value={targetVolume} format={v => `${v.toFixed(2)}M`}
+              <RollingNumber value={targetVolume} format={fmtVolumeM}
                 className="font-mono text-[36px] font-semibold leading-none tracking-tight text-ink tnum sm:text-[42px]" />
               {pct != null && (
                 <span className={`inline-flex items-center text-[14px] font-medium leading-none tnum ${pct >= 0 ? 'text-accent' : 'text-critical'}`}>

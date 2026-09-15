@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import { GraphCanvas } from './GraphCanvas'
 import { InspectorSidebar } from './InspectorSidebar'
 import GraphTools from './GraphTools'
@@ -22,6 +22,11 @@ export default function GraphExplorer({ onNav, params }) {
   const featured = useAsync(() => source.featured(), [source.mode])
   const graph = useAsync(() => (target ? source.graph.subgraph(target, depth) : Promise.resolve(null)), [source.mode, target, depth])
   const elements = useMemo(() => graph.data || { nodes: [], edges: [] }, [graph.data])
+
+  // Never land on an empty canvas: open the richest featured neighbourhood by default.
+  useEffect(() => {
+    if (!target && featured.data?.length) onNav('graph', { account: featured.data[0], depth })
+  }, [target, featured.data, onNav, depth])
 
   const go = (id, d = depth) => { setSelected(null); setPathIds(null); onNav('graph', { account: id, depth: d }) }
   const onPath = (p) => setPathIds(p.nodes.map(n => n.data.id))

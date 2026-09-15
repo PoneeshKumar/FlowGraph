@@ -36,8 +36,17 @@ export function GraphCanvas({ elements, lens = 'risk', cutoff = 0.74, selectedId
       container: containerRef.current,
       elements: decorate(elements, cutoff),
       style: buildStyle(lens, { labels: n <= LABEL_LIMIT }),
-      layout: layoutFor(n),
+      minZoom: 0.15,
+      maxZoom: 3,
     })
+    // Run the layout explicitly so we can clamp the zoom afterwards: `fit` on a
+    // two-node neighbourhood otherwise blows the nodes up to fill the canvas.
+    const layout = cy.layout(layoutFor(n))
+    layout.one('layoutstop', () => {
+      cy.fit(undefined, 48)
+      if (cy.zoom() > 1.25) { cy.zoom(1.25); cy.center() }
+    })
+    layout.run()
     cy.on('tap', 'node', evt => onSelectNode?.(evt.target.data()))
     cy.on('tap', evt => { if (evt.target === cy) onSelectNode?.(null) })
     if (n <= 800) {

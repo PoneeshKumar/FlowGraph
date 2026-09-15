@@ -154,6 +154,9 @@ async def collect(featured_n: int, llm: Optional[str]) -> Dict[str, Any]:
                                                 "explanation": expl.model_dump()}
             if i % 10 == 0:
                 log.info("  featured %d/%d", i, len(featured))
+        # Richest neighbourhoods first: the demo's Graph tab opens on featured[0],
+        # and a 2-node cycle member makes a thin first impression.
+        featured.sort(key=lambda aid: -len(graph[f"graph/{aid}.json"]["nodes"]))
         pairs = pick_pairs(featured, {aid: graph[f"graph/{aid}.json"] for aid in featured}, 5)
         paths: Dict[str, Any] = {}
         flows: Dict[str, Any] = {}
