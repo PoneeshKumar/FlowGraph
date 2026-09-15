@@ -67,6 +67,28 @@ def build_series(hist: Dict[int, Tuple[int, int]], start_ts: int, end_ts: int,
     return {"t": t, "volume": vol, "txns": cnt, "baseline": baseline}
 
 
+def activity_end_ts(hist_by_rail: Dict[str, Dict[int, Tuple[int, int]]], dataset_end: int,
+                    quantile: float = 0.999) -> int:
+    """End of *observed* activity: the base bucket by which `quantile` of all
+    transactions have happened. Short periods (24h/7d) anchor here rather than at
+    the dataset's literal last timestamp, because synthetic datasets trail off
+    into a sparse tail (IBM HI-Small: 99.98% of rows fall before day 11 of 18,
+    so a 7-day window ending on day 18 would hold ~300 transactions)."""
+    counts: Dict[int, int] = {}
+    for h in hist_by_rail.values():
+        for b, (c, _amount) in h.items():
+            counts[b] = counts.get(b, 0) + c
+    total = sum(counts.values())
+    if total == 0:
+        return dataset_end
+    running = 0
+    for b in sorted(counts):
+        running += counts[b]
+        if running >= quantile * total:
+            return min(dataset_end, (b + 1) * BUCKET_BASE)
+    return dataset_end
+
+
 _HIST_Q = (
     "MATCH ()-[t:TRANSFER]->() "
     "WITH t.rail AS rail, toInteger(t.ts / 1800) AS b, t.amount_cents AS amt "
@@ -124,6 +146,8 @@ class StatsCache:
                 dataset.setdefault("labelled", False)
                 dataset["start_ts"] = min(bs) * BUCKET_BASE if bs else 0
                 dataset["end_ts"] = (max(bs) + 1) * BUCKET_BASE if bs else 0
+            dataset = dict(dataset)
+            dataset["activity_end_ts"] = activity_end_ts(hist, int(dataset["end_ts"]))
             open_flags = await pg.count_open_flags_by_type()
             flagged = set(await pg.get_account_ids_for_flag_type("AGGREGATE", "open"))
             latest = await pg.get_latest_pipeline_run()
@@ -164,7 +188,9 @@ class StatsCache:
         rail = self.rail_for(currency)
         if rail is None:
             raise KeyError(currency)
-        start, end, bucket = period_window(period, int(self._dataset["start_ts"]), int(self._dataset["end_ts"]))
+        # "all" spans the whole dataset; short periods end where activity ends.
+        anchor = int(self._dataset["end_ts"]) if period == "all" else self.anchor_ts()
+        start, end, bucket = period_window(period, int(self._dataset["start_ts"]), anchor)
         out = build_series(self._hist[rail], start, end, bucket)
         out.update({"currency": currency_code(rail), "period": period, "anchor_ts": end,
                     "start_ts": start, "bucket_seconds": bucket})
@@ -177,6 +203,11 @@ class StatsCache:
         if not self.ready():
             return None
         return int(self._dataset["end_ts"])
+
+    def anchor_ts(self) -> int:
+        """Where time-windowed reads should count back from: the end of observed
+        activity (see activity_end_ts), falling back to the dataset end."""
+        return int(self._dataset.get("activity_end_ts") or self._dataset["end_ts"])
 
 
 cache = StatsCache()

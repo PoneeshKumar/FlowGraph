@@ -125,9 +125,20 @@ def test_cache_builds_overview_and_series():
     s = c.series("US Dollar", "all")
     assert s["currency"] == "US Dollar" and s["anchor_ts"] == 7200 and s["start_ts"] == 0
     assert s["volume"][-1] == 300.0 and s["txns"][-1] == 5
+    # short periods anchor at the end of observed activity (last bucket b=2 → 5400)
+    s7 = c.series("US Dollar", "7d")
+    assert s7["anchor_ts"] == 5400 and c.anchor_ts() == 5400
+    assert ov["dataset"]["activity_end_ts"] == 5400
     assert c.is_flagged("f1") and not c.is_flagged("zzz")
     assert c.rail_for("Euro") == "IBM_AML_Euro" and c.rail_for("Nope") is None
     assert c.dataset_end_ts() == 7200
+
+
+def test_activity_end_ts_ignores_sparse_tail():
+    hist = {"A": {0: (1000, 1), 5: (1, 1)}}            # 1000 txns in bucket 0, 1 straggler later
+    assert ss.activity_end_ts(hist, dataset_end=99_999) == 1800
+    assert ss.activity_end_ts({"A": {}}, dataset_end=42) == 42     # no data → dataset end
+    assert ss.activity_end_ts({"A": {3: (5, 1)}}, dataset_end=5000) == 5000  # clamped to end
 
 
 def test_cache_series_errors_and_invalidate():

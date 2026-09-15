@@ -154,7 +154,12 @@ values by migration 004; rewritten by an upload).
 - `baseline[i] = volume[-1] * i / (n-1)` — the *uniform-pace* line (what cumulative
   volume would be if flow were constant). This is what the dashed line means.
 - Buckets: `24h` → 1800 s (48 pts); `7d` → 21600 s (28 pts); `all` → 86400 s (dataset span).
-- `period=all` uses `start_ts = dataset.start_ts`.
+- `period=all` spans `dataset.start_ts … dataset.end_ts`. **Short periods anchor at
+  `dataset.activity_end_ts`** — the timestamp by which 99.9% of all transactions have
+  occurred (`stats_service.activity_end_ts`). Measured on HI-Small: activity runs
+  2022-09-02 → 09-11 and days 12–19 hold ~400 rows in total, so a 7-day window ending
+  at the literal last timestamp would show ~300 transactions. Time-windowed graph reads
+  (`/graph/flow`) count back from the same anchor.
 - 404 for an unknown currency; 422 for a bad period.
 
 ### 6.3 `StatsCache` (in-process)
