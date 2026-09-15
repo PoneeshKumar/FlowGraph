@@ -1,7 +1,8 @@
 # backend/app/api/endpoints.py
 from typing import Optional
 
-from fastapi import APIRouter, Query
+from fastapi import APIRouter, Query, HTTPException
+from app.services import stats_service
 from app.services.graph_service import GraphService
 from app.services.ai_enrichment import AIEnrichmentService
 from app.schemas.graph import GraphElements, FlowSummaryResponse, AIReportResponse
@@ -46,3 +47,23 @@ async def trigger_risk_evaluation(
         has_cycle=has_cycle,
         cycle_length=cycle_length
     )
+
+
+@router.get("/stats/overview")
+async def stats_overview():
+    if not stats_service.cache.ready():
+        raise HTTPException(status_code=503, detail="stats warming up")
+    return stats_service.cache.overview()
+
+
+@router.get("/stats/volume-series")
+async def stats_volume_series(
+    currency: str = Query(..., description="Currency code, e.g. 'US Dollar'"),
+    period: str = Query("7d", pattern="^(24h|7d|all)$"),
+):
+    if not stats_service.cache.ready():
+        raise HTTPException(status_code=503, detail="stats warming up")
+    try:
+        return stats_service.cache.series(currency, period)
+    except KeyError:
+        raise HTTPException(status_code=404, detail=f"unknown currency: {currency}")

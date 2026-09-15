@@ -1,4 +1,5 @@
 # backend/app/api/main.py
+import asyncio
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
@@ -10,6 +11,7 @@ from app.core.config import settings
 from app.api.endpoints import router as api_router
 from app.db.neo4j import neo4j_client
 from app.db.redis import redis_pool
+from app.services import stats_service
 from app.viz.router import router as viz_router
 from app.viz import deps as viz_deps
 
@@ -17,7 +19,11 @@ from app.viz import deps as viz_deps
 async def lifespan(app: FastAPI):
     neo4j_client.connect()
     await viz_deps.startup()
+    # Whole-graph stats take one ~8 s scan — build them off the request path.
+    warm = asyncio.create_task(
+        stats_service.warmup(neo4j_client.driver.session, viz_deps.pg()))
     yield
+    warm.cancel()
     await viz_deps.shutdown()
     await neo4j_client.close()
     await redis_pool.disconnect()

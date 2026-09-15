@@ -132,6 +132,8 @@ class PipelineRunner:
         from app.viz import threshold, metrics
         metrics.invalidate()                     # scores just changed — drop stale cache
         threshold.invalidate()                    # pick up a hot-swapped run's tuned cutoff
+        from app.services import stats_service
+        stats_service.invalidate()               # open-flag counts and latest_run changed
         weights = MarkWeights()
         thresholds = MarkThresholds(gnn=threshold.model_threshold())
         marked = 0
