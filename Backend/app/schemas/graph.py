@@ -6,9 +6,13 @@ class NodeData(BaseModel):
     id: str
     label: str
     node_type: str = "account"
-    risk_score: float = 0.0
-    risk_tier: str = "low"  # low, medium, high, critical
-    community_id: Optional[int] = None
+    risk_score: float = 0.0          # aggregator verdict if one was written, else the GNN score
+    risk_tier: str = "low"           # low, medium, high, critical
+    gnn_risk_score: Optional[float] = None
+    gnn_risk_tier: Optional[str] = None
+    in_cycle: bool = False
+    marked: bool = False             # our pipeline's mark (cycle OR GNN ≥ tuned cutoff)
+    community_id: Optional[str] = None
     pagerank_score: Optional[float] = 0.0
     attributes: Dict[str, Any] = Field(default_factory=dict)
 

@@ -1,11 +1,14 @@
 import time
-from typing import Dict, Any, List
+from typing import Dict, Any, List, Optional
 
 from neo4j.exceptions import ClientError
 
 from app.db.neo4j import neo4j_client
-from app.db.redis import get_redis
 from app.schemas.graph import GraphElements, NodeElement, NodeData, EdgeElement, EdgeData
+
+_HIDDEN = {"id", "risk_score", "risk_tier", "gnn_risk_score", "gnn_risk_tier", "in_cycle",
+           "community_id", "pagerank_score", "label", "node_type"}
+
 
 class GraphService:
     @staticmethod
@@ -14,6 +17,41 @@ class GraphService:
         if score >= 0.65: return "high"
         if score >= 0.40: return "medium"
         return "low"
+
+    @classmethod
+    def node_data(cls, props: Dict[str, Any]) -> NodeData:
+        """One rule for turning stored Account properties into API node data.
+        Real accounts carry gnn_* properties; risk_score/risk_tier exist only
+        once the aggregator has written a verdict, and take precedence then."""
+        from app.viz import threshold
+        nid = str(props.get("id"))
+        gnn = props.get("gnn_risk_score")
+        gnn = float(gnn) if gnn is not None else None
+        score = props.get("risk_score")
+        score = float(score) if score is not None else (gnn if gnn is not None else 0.0)
+        tier = props.get("risk_tier") or props.get("gnn_risk_tier") or cls._map_risk_tier(score)
+        in_cycle = bool(props.get("in_cycle", False))
+        return NodeData(
+            id=nid,
+            label=str(props.get("label") or nid[:8]),
+            node_type=str(props.get("node_type") or "account"),
+            risk_score=score,
+            risk_tier=str(tier),
+            gnn_risk_score=gnn,
+            gnn_risk_tier=props.get("gnn_risk_tier"),
+            in_cycle=in_cycle,
+            marked=threshold.is_marked(gnn, in_cycle, threshold.model_threshold()),
+            community_id=(str(props["community_id"]) if props.get("community_id") is not None else None),
+            pagerank_score=float(props.get("pagerank_score") or 0.0),
+            attributes={k: v for k, v in props.items() if k not in _HIDDEN},
+        )
+
+    @classmethod
+    async def get_account(cls, account_id: str) -> Optional[NodeData]:
+        async with neo4j_client.driver.session() as session:
+            rec = await (await session.run(
+                "MATCH (a:Account {id: $id}) RETURN a", id=account_id)).single()
+        return cls.node_data(dict(rec["a"])) if rec else None
 
     @classmethod
     async def get_subgraph(cls, account_id: str, depth: int = 2, limit: int = 100) -> GraphElements:
@@ -69,19 +107,7 @@ class GraphService:
                     continue
                 seen_nodes.add(nid)
                 
-                score = float(props.get("risk_score", 0.0))
-                nodes_out.append(NodeElement(
-                    data=NodeData(
-                        id=nid,
-                        label=props.get("label", nid[:8]),
-                        node_type=props.get("node_type", "account"),
-                        risk_score=score,
-                        risk_tier=cls._map_risk_tier(score),
-                        community_id=props.get("community_id"),
-                        pagerank_score=props.get("pagerank_score", 0.0),
-                        attributes={k: v for k, v in props.items() if k not in ["id", "risk_score"]}
-                    )
-                ))
+                nodes_out.append(NodeElement(data=cls.node_data(props)))
 
             for rel in record["relationships"]:
                 rid = f"{rel.start_node['id']}->{rel.end_node['id']}"
@@ -120,14 +146,7 @@ class GraphService:
             if not record:
                 return GraphElements(nodes=[], edges=[])
 
-            nodes_out = [
-                NodeElement(data=NodeData(
-                    id=dict(n)["id"],
-                    label=dict(n)["id"][:8],
-                    risk_score=float(dict(n).get("risk_score", 0.0)),
-                    risk_tier=cls._map_risk_tier(float(dict(n).get("risk_score", 0.0)))
-                )) for n in record["nodes"]
-            ]
+            nodes_out = [NodeElement(data=cls.node_data(dict(n))) for n in record["nodes"]]
             edges_out = [
                 EdgeElement(data=EdgeData(
                     id=f"{r.start_node['id']}->{r.end_node['id']}",
@@ -141,28 +160,25 @@ class GraphService:
 
     @staticmethod
     async def get_flow_between(account_a: str, account_b: str, window: str = "7d") -> Dict[str, Any]:
+        """Volume a→b inside a window, read from TRANSFER edges. The window counts
+        back from the loaded dataset's activity anchor (the data is historical);
+        wall-clock only when no stats are loaded."""
+        from app.services.stats_service import cache
         seconds_map = {"1h": 3600, "24h": 86400, "7d": 604800, "30d": 2592000}
-        window_seconds = seconds_map.get(window, 604800)
-        min_ts = time.time() - window_seconds
-        
-        redis = get_redis()
-        key = f"edge:{account_a}:{account_b}"
-        tx_entries = await redis.zrangebyscore(key, min=min_ts, max="+inf")
-        
-        total_vol = 0.0
-        tx_count = len(tx_entries)
-        for tx in tx_entries:
-            try:
-                total_vol += float(tx.split(":")[0])  # amount_cents:txn_id
-            except (ValueError, IndexError):
-                total_vol += 0.0
-                
+        anchor = cache.anchor_ts() if cache.ready() else int(time.time())
+        min_ts = anchor - seconds_map.get(window, 604800)
+        query = (
+            "MATCH (a:Account {id: $a})-[t:TRANSFER]->(b:Account {id: $b}) "
+            "WHERE t.ts >= $min_ts "
+            "RETURN count(t) AS n, coalesce(sum(t.amount_cents), 0) AS total"
+        )
+        async with neo4j_client.driver.session() as session:
+            rec = await (await session.run(query, a=account_a, b=account_b, min_ts=min_ts)).single()
+        n = int(rec["n"]) if rec else 0
+        total = float(rec["total"]) if rec else 0.0
         return {
-            "source": account_a,
-            "target": account_b,
-            "window": window,
-            "total_volume_cents": total_vol,
-            "tx_count": tx_count,
-            "avg_amount_cents": (total_vol / tx_count) if tx_count > 0 else 0.0,
-            "path_count": 1 if tx_count > 0 else 0
+            "source": account_a, "target": account_b, "window": window,
+            "total_volume_cents": total, "tx_count": n,
+            "avg_amount_cents": (total / n) if n else 0.0,
+            "path_count": 1 if n else 0,
         }

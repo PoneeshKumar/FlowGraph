@@ -8,7 +8,7 @@ from app.schemas.api import AlertPage, AlertOut, AlertStatusUpdate, TransactionP
 from app.db.neo4j import neo4j_client
 from app.viz import deps as viz_deps
 from app.services.ai_enrichment import AIEnrichmentService
-from app.schemas.graph import GraphElements, FlowSummaryResponse, AIReportResponse
+from app.schemas.graph import GraphElements, FlowSummaryResponse, AIReportResponse, NodeData
 from app.services.risk_aggregator import RiskAggregator, RiskVerdict
 router = APIRouter()
 
@@ -23,6 +23,13 @@ async def get_subgraph(
 @router.get("/graph/shortest-path", response_model=GraphElements)
 async def get_shortest_path(account_a: str = Query(...), account_b: str = Query(...)):
     return await GraphService.get_shortest_path(account_a, account_b)
+
+@router.get("/graph/account/{account_id}", response_model=NodeData)
+async def get_account(account_id: str):
+    node = await GraphService.get_account(account_id)
+    if node is None:
+        raise HTTPException(status_code=404, detail="no such account")
+    return node
 
 @router.get("/graph/flow", response_model=FlowSummaryResponse)
 async def get_flow(
