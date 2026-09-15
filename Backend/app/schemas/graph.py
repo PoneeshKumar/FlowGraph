@@ -44,11 +44,3 @@ class FlowSummaryResponse(BaseModel):
     tx_count: int
     avg_amount_cents: float
     path_count: int
-
-class AIReportResponse(BaseModel):
-    account_id: str
-    risk_level: str
-    confidence: float
-    explanation: str
-    detected_typology: Optional[str]
-    compliance_summary: str

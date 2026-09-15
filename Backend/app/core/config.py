@@ -20,6 +20,13 @@ class Settings(BaseSettings):
     # LLM API
     ANTHROPIC_API_KEY: str = ""
 
+    # --- Explanation service (app/services/explanation_service.py) ---
+    # LLM_PROVIDER: "anthropic" | "ollama" | "none" | "" (auto: key → anthropic,
+    # else a reachable Ollama, else none). LLM_MODEL defaults per provider.
+    LLM_PROVIDER: str = ""
+    LLM_MODEL: str = ""
+    OLLAMA_BASE_URL: str = "http://localhost:11434"
+
     # --- Community visualiser (/viz) ---
     GNN_RUN_DIR: str = "ml/runs/v10_L3"
     # Extra checkpoints averaged with GNN_RUN_DIR into a seed ensemble. Averaging

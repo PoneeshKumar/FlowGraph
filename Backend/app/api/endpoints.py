@@ -2,13 +2,14 @@
 from typing import Optional
 
 from fastapi import APIRouter, Query, HTTPException
-from app.services import stats_service, alerts_service, transactions_service
+from app.services import stats_service, alerts_service, transactions_service, explanation_service
 from app.services.graph_service import GraphService
-from app.schemas.api import AlertPage, AlertOut, AlertStatusUpdate, TransactionPage
+from app.schemas.api import (
+    AlertPage, AlertOut, AlertStatusUpdate, TransactionPage, ExplanationOut, LLMStatus,
+)
 from app.db.neo4j import neo4j_client
 from app.viz import deps as viz_deps
-from app.services.ai_enrichment import AIEnrichmentService
-from app.schemas.graph import GraphElements, FlowSummaryResponse, AIReportResponse, NodeData
+from app.schemas.graph import GraphElements, FlowSummaryResponse, NodeData
 from app.services.risk_aggregator import RiskAggregator, RiskVerdict
 router = APIRouter()
 
@@ -40,9 +41,14 @@ async def get_flow(
     flow_data = await GraphService.get_flow_between(account_a, account_b, window)
     return FlowSummaryResponse(**flow_data)
 
-@router.get("/accounts/{account_id}/enrich", response_model=AIReportResponse)
+@router.get("/accounts/{account_id}/enrich", response_model=ExplanationOut)
 async def enrich_account(account_id: str):
-    return await AIEnrichmentService.generate_explanation(account_id)
+    return await explanation_service.service.explain(account_id)
+
+
+@router.get("/system/llm", response_model=LLMStatus)
+async def llm_status():
+    return explanation_service.service.status()
 
 @router.post("/risk/evaluate/{account_id}", response_model=RiskVerdict)
 async def trigger_risk_evaluation(

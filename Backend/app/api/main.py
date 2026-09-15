@@ -11,7 +11,7 @@ from app.core.config import settings
 from app.api.endpoints import router as api_router
 from app.db.neo4j import neo4j_client
 from app.db.redis import redis_pool
-from app.services import stats_service
+from app.services import stats_service, explanation_service
 from app.viz.router import router as viz_router, api as viz_api_router
 from app.viz import deps as viz_deps
 
@@ -22,6 +22,7 @@ async def lifespan(app: FastAPI):
     # Whole-graph stats take one ~8 s scan — build them off the request path.
     warm = asyncio.create_task(
         stats_service.warmup(neo4j_client.driver.session, viz_deps.pg()))
+    await explanation_service.configure(settings)   # pick ollama / anthropic / rule-based once
     yield
     warm.cancel()
     await viz_deps.shutdown()
