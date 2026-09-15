@@ -1,245 +1,95 @@
-import React, { useEffect, useState } from 'react';
-import { apiClient } from '../services/api';
+import { useState } from 'react'
+import { RiskChip, Skeleton, ErrorNote, DemoNote } from './ui'
+import { useAsync } from '../hooks/useAsync'
+import { NotInSnapshotError } from '../services/dataSource'
+import { shortId } from '../lib/format'
 
-const needsEnrichment = (node) => Boolean(node?.risk_tier) && node.risk_tier !== 'low';
+function Row({ k, v, mono = true }) {
+  return (
+    <div className="flex items-baseline justify-between gap-3 py-1.5 text-[12px]">
+      <span className="text-ink-3">{k}</span>
+      <span className={`${mono ? 'font-mono tnum' : ''} text-right text-ink`}>{v ?? '—'}</span>
+    </div>
+  )
+}
 
-export const InspectorSidebar = ({ node, onClose, onNodeUpdated }) => {
-  const [report, setReport] = useState(null);
-  const [verdict, setVerdict] = useState(null);
-  const [evaluating, setEvaluating] = useState(false);
-  const [enriching, setEnriching] = useState(false);
+export function InspectorSidebar({ source, node, onClose, onExplore }) {
+  const [whatIf, setWhatIf] = useState(null)
+  const [whatIfError, setWhatIfError] = useState(null)
+  const explain = useAsync(() => (node ? source.ai.explain(node.id) : Promise.resolve(null)), [source.mode, node?.id])
+  if (!node) return null
 
-  useEffect(() => {
-    if (!node) {
-      setVerdict(null);
-      setReport(null);
-      return;
-    }
-
-    let active = true;
-
-    // 1. Run Stage 06/07 Risk Aggregation evaluation
-    setEvaluating(true);
-    apiClient.evaluateRisk(node.id, { gnn_score: node.risk_score || 0.5 })
-      .then((res) => {
-        if (active) setVerdict(res);
-      })
-      .catch((err) => console.error('Aggregation evaluation failed:', err))
-      .finally(() => {
-        if (active) setEvaluating(false);
-      });
-
-    // 2. Fetch Claude AI report for elevated risk accounts
-    if (needsEnrichment(node)) {
-      setEnriching(true);
-      apiClient.getAIReport(node.id)
-        .then((data) => {
-          if (active) setReport({ accountId: node.id, data });
-        })
-        .catch((err) => console.error('AI enrichment failed:', err))
-        .finally(() => {
-          if (active) setEnriching(false);
-        });
-    } else {
-      setReport(null);
-      setEnriching(false);
-    }
-
-    return () => {
-      active = false;
-    };
-  }, [node]);
-
-  if (!node) return null;
-
-  const currentTier = verdict ? verdict.risk_tier : node.risk_tier || 'low';
-  const currentScore = verdict ? verdict.risk_score : node.risk_score || 0;
-  const settledForNode = Boolean(report && report.accountId === node.id);
-  const currentReport = settledForNode ? report.data : null;
-
-  const getTierBadgeStyle = (tier) => {
-    switch (tier) {
-      case 'critical': return 'text-red-400 bg-red-950/60 border-red-800';
-      case 'high': return 'text-orange-400 bg-orange-950/60 border-orange-800';
-      case 'medium': return 'text-yellow-400 bg-yellow-950/60 border-yellow-800';
-      default: return 'text-emerald-400 bg-emerald-950/60 border-emerald-800';
-    }
-  };
-
-  const handleSimulateCycle = async () => {
-    setEvaluating(true);
-    try {
-      const res = await apiClient.evaluateRisk(node.id, {
-        gnn_score: currentScore,
-        has_cycle: true,
-        cycle_length: 3
-      });
-      setVerdict(res);
-      if (onNodeUpdated) {
-        onNodeUpdated({ ...node, risk_score: res.risk_score, risk_tier: res.risk_tier });
-      }
-    } catch (err) {
-      console.error('Cycle simulation failed:', err);
-    } finally {
-      setEvaluating(false);
-    }
-  };
+  const simulateCycle = async () => {
+    setWhatIfError(null)
+    try { setWhatIf(await source.risk.evaluate(node.id, { gnn_score: node.gnn_risk_score ?? 0.5, has_cycle: true, cycle_length: 3 })) }
+    catch (e) { setWhatIfError(e) }
+  }
+  const ex = explain.data
 
   return (
-    <aside className="w-96 bg-slate-900 border-l border-slate-800 p-6 flex flex-col h-full overflow-y-auto shadow-2xl">
-      {/* Header */}
-      <div className="flex justify-between items-center pb-4 border-b border-slate-800">
-        <h2 className="text-lg font-semibold text-slate-100">Account Decision Audit</h2>
-        <button 
-          onClick={onClose} 
-          className="text-slate-400 hover:text-white transition-colors"
-        >
-          ✕
-        </button>
+    <aside className="glass-soft flex h-full w-[380px] shrink-0 flex-col overflow-y-auto border-l border-line px-6 py-5">
+      <div className="flex items-start justify-between gap-3 border-b border-line pb-4">
+        <div className="min-w-0">
+          <p className="text-[10px] font-bold uppercase tracking-[0.1em] text-ink-4">Account</p>
+          <p className="mt-1 break-all font-mono text-[12px] text-ink">{node.id}</p>
+        </div>
+        <button type="button" onClick={onClose} className="text-ink-4 hover:text-ink" aria-label="Close">✕</button>
       </div>
 
-      <div className="mt-4 space-y-4">
-        {/* Account Identifier */}
-        <div>
-          <span className="text-xs text-slate-400 uppercase tracking-wider">Account Key</span>
-          <p className="font-mono text-xs text-slate-200 break-all mt-1 bg-slate-950 p-2 rounded border border-slate-800">
-            {node.id}
-          </p>
+      <div className="mt-4 flex items-center gap-3">
+        <span className="font-mono text-[28px] font-semibold leading-none text-ink tnum">{((node.gnn_risk_score ?? node.risk_score ?? 0) * 100).toFixed(0)}%</span>
+        <div className="flex flex-col gap-1">
+          <RiskChip level={node.gnn_risk_tier || node.risk_tier || 'low'} />
+          <span className="text-[10px] text-ink-4">GNN risk score</span>
         </div>
+      </div>
 
-        {/* Aggregated Score & Tier Display */}
-        <div className="grid grid-cols-2 gap-3">
-          <div className="bg-slate-950 p-3 rounded border border-slate-800">
-            <span className="text-xs text-slate-400">Aggregated Risk</span>
-            <p className="text-xl font-bold text-slate-100 mt-1">
-              {(currentScore * 100).toFixed(1)}%
-            </p>
-          </div>
-          <div className="bg-slate-950 p-3 rounded border border-slate-800">
-            <span className="text-xs text-slate-400">Tier</span>
-            <div className={`mt-1 inline-block px-2 py-0.5 rounded text-xs font-semibold border ${getTierBadgeStyle(currentTier)}`}>
-              {currentTier.toUpperCase()}
-            </div>
-          </div>
+      <div className="mt-4 divide-y divide-line/70">
+        <Row k="On detected cycle" v={node.in_cycle ? 'yes' : 'no'} />
+        <Row k="Marked by pipeline" v={node.marked ? 'yes' : 'no'} />
+        <Row k="Community" v={node.community_id ? shortId(node.community_id) : '—'} />
+        <Row k="PageRank" v={node.pagerank_score ? Number(node.pagerank_score).toExponential(2) : '—'} />
+        {node.risk_score != null && node.gnn_risk_score != null && node.risk_score !== node.gnn_risk_score && (
+          <Row k="Aggregated verdict" v={`${(node.risk_score * 100).toFixed(0)}% · ${node.risk_tier}`} />
+        )}
+      </div>
+
+      <div className="mt-5 border-t border-line pt-4">
+        <div className="flex items-center justify-between">
+          <p className="text-[10px] font-bold uppercase tracking-[0.1em] text-ink-4">Explanation</p>
+          {ex && <span className="font-mono text-[10px] text-ink-4">{ex.provider === 'none' ? 'rule-based' : `${ex.provider}${ex.model ? ` · ${ex.model}` : ''}`}</span>}
         </div>
-
-        {/* Classifier Confidence & AI Delegation Status */}
-        {verdict && (
-          <div className="bg-slate-950 p-3.5 rounded border border-slate-800 space-y-2">
-            <div className="flex justify-between items-center text-xs">
-              <span className="text-slate-400">Classifier Confidence</span>
-              <span className="font-semibold text-slate-200">{(verdict.confidence * 100).toFixed(0)}%</span>
+        {explain.loading ? <div className="mt-2 space-y-2"><Skeleton className="h-3 w-full" /><Skeleton className="h-3 w-5/6" /></div>
+          : explain.error instanceof NotInSnapshotError ? <div className="mt-2"><DemoNote>{explain.error.message}</DemoNote></div>
+          : explain.error ? <div className="mt-2"><ErrorNote error={explain.error} onRetry={explain.reload} /></div>
+          : ex ? (
+            <div className="mt-2 space-y-2">
+              <div className="flex items-center gap-2 text-[11px] text-ink-3">
+                <RiskChip level={ex.risk_level} /><span className="font-mono tnum">confidence {(ex.confidence * 100).toFixed(0)}%</span>
+                {ex.detected_typology && <span className="rounded bg-hover px-1.5 py-px font-mono text-[10px] text-ink-2">{ex.detected_typology}</span>}
+              </div>
+              <p className="text-[13px] leading-relaxed text-ink-2">{ex.explanation}</p>
+              <p className="font-mono text-[10.5px] leading-relaxed text-ink-4">{ex.compliance_summary}</p>
             </div>
-            
-            <div className="w-full bg-slate-800 rounded-full h-1.5 overflow-hidden">
-              <div 
-                className={`h-1.5 rounded-full ${verdict.confidence >= 0.7 ? 'bg-sky-500' : 'bg-amber-500'}`}
-                style={{ width: `${verdict.confidence * 100}%` }}
-              />
-            </div>
-
-            {verdict.delegated_to_ai ? (
-              <div className="mt-2 flex items-center gap-1.5 text-[11px] font-medium text-amber-300 bg-amber-950/40 border border-amber-800/60 p-2 rounded">
-                <span className="inline-block w-1.5 h-1.5 rounded-full bg-amber-400 animate-ping" />
-                Delegated to Claude API (Low Confidence Edge Case)
-              </div>
-            ) : (
-              <div className="mt-1 text-[11px] text-slate-500">
-                Resolved deterministically via Stage 05/06 scoring
-              </div>
-            )}
-          </div>
-        )}
-
-        {/* Input Signals Breakdown */}
-        {verdict?.triggering_signals && (
-          <div>
-            <span className="text-xs font-semibold text-slate-400 uppercase tracking-wider">
-              Input Signals
-            </span>
-            <div className="mt-2 grid grid-cols-2 gap-2 text-xs">
-              <div className="bg-slate-950/70 p-2 rounded border border-slate-800">
-                <span className="text-slate-500 block">GNN Weight (75%)</span>
-                <span className="font-mono text-slate-200">
-                  {verdict.triggering_signals.gnn_score?.toFixed(3)}
-                </span>
-              </div>
-              <div className="bg-slate-950/70 p-2 rounded border border-slate-800">
-                <span className="text-slate-500 block">Cycle Detection</span>
-                <span className={`font-mono ${verdict.triggering_signals.has_cycle ? 'text-red-400' : 'text-slate-400'}`}>
-                  {verdict.triggering_signals.has_cycle ? `${verdict.triggering_signals.cycle_length}-Hop Loop` : 'None'}
-                </span>
-              </div>
-              <div className="bg-slate-950/70 p-2 rounded border border-slate-800">
-                <span className="text-slate-500 block">PageRank (10%)</span>
-                <span className="font-mono text-slate-200">
-                  {verdict.triggering_signals.pagerank_percentile?.toFixed(2)}
-                </span>
-              </div>
-              <div className="bg-slate-950/70 p-2 rounded border border-slate-800">
-                <span className="text-slate-500 block">Community (15%)</span>
-                <span className="font-mono text-slate-200">
-                  {verdict.triggering_signals.community_risk_score?.toFixed(2)}
-                </span>
-              </div>
-            </div>
-          </div>
-        )}
-
-        {/* AI Explainability & Audit Trail Section */}
-        <div className="mt-4 pt-4 border-t border-slate-800">
-          <div className="flex items-center justify-between">
-            <h3 className="text-xs font-semibold text-sky-400 uppercase tracking-wider">
-              Compliance Reasoning
-            </h3>
-            {(enriching || evaluating) && (
-              <span className="text-[11px] text-slate-400 animate-pulse">Analyzing signals...</span>
-            )}
-          </div>
-
-          {currentReport ? (
-            <div className="mt-2 bg-slate-950 rounded p-3 border border-slate-800 space-y-2">
-              <div>
-                <span className="text-[10px] text-slate-400 uppercase">Detected Typology</span>
-                <p className="text-xs font-medium text-amber-300">
-                  {currentReport.detected_typology || 'None detected'}
-                </p>
-              </div>
-              <div>
-                <span className="text-[10px] text-slate-400 uppercase">Reasoning</span>
-                <p className="text-xs text-slate-300 mt-0.5 leading-relaxed">
-                  {currentReport.explanation}
-                </p>
-              </div>
-              <div className="pt-2 border-t border-slate-800">
-                <span className="text-[10px] text-slate-400 uppercase">Audit Trail</span>
-                <p className="text-[11px] font-mono text-slate-400 mt-0.5 bg-slate-900 p-2 rounded">
-                  {currentReport.compliance_summary}
-                </p>
-              </div>
-            </div>
-          ) : verdict?.explanation ? (
-            <p className="text-xs text-slate-300 mt-2 bg-slate-950 p-3 rounded border border-slate-800 leading-relaxed font-sans">
-              {verdict.explanation}
-            </p>
-          ) : !needsEnrichment(node) ? (
-            <p className="mt-2 text-xs text-slate-500 leading-relaxed">
-              Automated AI enrichment runs for elevated-risk accounts (medium tier and above).
-            </p>
           ) : null}
-        </div>
-
-        {/* Override Simulation for Testing */}
-        <div className="pt-2 border-t border-slate-800">
-          <button
-            onClick={handleSimulateCycle}
-            disabled={evaluating}
-            className="w-full bg-slate-800 hover:bg-slate-700 disabled:opacity-50 text-xs py-2 rounded text-slate-200 transition-colors border border-slate-700 font-medium"
-          >
-            {evaluating ? 'Evaluating...' : 'Simulate 3-Hop Cycle Override'}
-          </button>
-        </div>
       </div>
+
+      <div className="mt-5 border-t border-line pt-4">
+        <p className="text-[10px] font-bold uppercase tracking-[0.1em] text-ink-4">What-if</p>
+        <button type="button" onClick={simulateCycle} className="mt-2 text-[12px] font-medium text-accent hover:opacity-70">
+          Re-evaluate as if on a 3-hop cycle →
+        </button>
+        {whatIfError instanceof NotInSnapshotError ? <div className="mt-2"><DemoNote>{whatIfError.message}</DemoNote></div>
+          : whatIfError ? <div className="mt-2"><ErrorNote error={whatIfError} /></div> : null}
+        {whatIf && (
+          <div className="mt-2 text-[12px] text-ink-2">
+            <div className="flex items-center gap-2"><RiskChip level={whatIf.risk_tier} /><span className="font-mono tnum">{(whatIf.risk_score * 100).toFixed(0)}% · confidence {(whatIf.confidence * 100).toFixed(0)}%</span></div>
+            <p className="mt-1 text-ink-3">{whatIf.explanation}</p>
+          </div>
+        )}
+      </div>
+
+      <button type="button" onClick={() => onExplore(node.id)} className="mt-6 text-[12px] font-medium text-accent hover:opacity-70">Center on this account →</button>
     </aside>
-  );
-};
+  )
+}

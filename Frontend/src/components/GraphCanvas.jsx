@@ -1,100 +1,83 @@
-import { useEffect, useRef } from 'react';
-import cytoscape from 'cytoscape';
-import coseBilkent from 'cytoscape-cose-bilkent';
+import { useEffect, useRef } from 'react'
+import cytoscape from 'cytoscape'
+import coseBilkent from 'cytoscape-cose-bilkent'
+import { buildStyle, communityColor, gnnHeat, isMarked, layoutFor, prSize } from '../lib/graphStyle'
 
-try {
-  cytoscape.use(coseBilkent);
-} catch {
-  // Prevent duplicate extension registration under HMR
+try { cytoscape.use(coseBilkent) } catch { /* registered under HMR already */ }
+
+const LABEL_LIMIT = 200
+
+function decorate(elements, cutoff) {
+  const prs = elements.nodes.map(n => n.data.pagerank_score || 0)
+  const min = prs.length ? Math.min(...prs) : 0, max = prs.length ? Math.max(...prs) : 0
+  const nodes = elements.nodes.map(n => ({ ...n, data: {
+    ...n.data,
+    _size: prSize(n.data.pagerank_score || 0, min, max),
+    _comm: communityColor(n.data.community_id),
+    _heat: gnnHeat(n.data.gnn_risk_score),
+    _marked: isMarked(n.data, cutoff),
+  } }))
+  return [...nodes, ...(elements.edges || [])]
 }
 
-export const GraphCanvas = ({ elements, onSelectNode }) => {
-  const containerRef = useRef(null);
-  const cyRef = useRef(null);
+/**
+ * Light-themed Cytoscape canvas. `lens` picks the colouring; `cutoff` drives the
+ * marked lens; `highlightIds` (e.g. a shortest path) are emphasised.
+ */
+export function GraphCanvas({ elements, lens = 'risk', cutoff = 0.74, selectedId, onSelectNode, highlightIds }) {
+  const containerRef = useRef(null)
+  const cyRef = useRef(null)
+
+  // (re)build on new elements
+  useEffect(() => {
+    if (!containerRef.current) return
+    const n = elements.nodes?.length || 0
+    const cy = cytoscape({
+      container: containerRef.current,
+      elements: decorate(elements, cutoff),
+      style: buildStyle(lens, { labels: n <= LABEL_LIMIT }),
+      layout: layoutFor(n),
+    })
+    cy.on('tap', 'node', evt => onSelectNode?.(evt.target.data()))
+    cy.on('tap', evt => { if (evt.target === cy) onSelectNode?.(null) })
+    if (n <= 800) {
+      cy.on('mouseover', 'node', e => {
+        cy.elements().addClass('faded'); e.target.closedNeighborhood().removeClass('faded')
+        e.target.addClass('hl'); e.target.connectedEdges().addClass('hl')
+      })
+      cy.on('mouseout', 'node', () => cy.elements().removeClass('faded hl'))
+    }
+    cyRef.current = cy
+    return () => { cy.destroy(); cyRef.current = null }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [elements])
+
+  // restyle without relayout
+  useEffect(() => {
+    const cy = cyRef.current
+    if (!cy) return
+    cy.batch(() => cy.nodes().forEach(nd => nd.data('_marked', isMarked(nd.data(), cutoff))))
+    cy.style(buildStyle(lens, { labels: cy.nodes().length <= LABEL_LIMIT }))
+  }, [lens, cutoff])
 
   useEffect(() => {
-    if (!containerRef.current) return;
+    const cy = cyRef.current
+    if (!cy) return
+    cy.elements().unselect()
+    if (selectedId) cy.getElementById(selectedId).select()
+  }, [selectedId])
 
-    cyRef.current = cytoscape({
-      container: containerRef.current,
-      elements: [...(elements.nodes || []), ...(elements.edges || [])],
-      style: [
-        {
-          selector: 'node',
-          style: {
-            'label': 'data(label)',
-            'color': '#cbd5e1',
-            'font-size': '11px',
-            'text-valign': 'bottom',
-            'text-margin-y': 4,
-            'background-color': '#475569',
-            'width': '36px',
-            'height': '36px',
-            'border-width': 2,
-            'border-color': '#1e293b'
-          }
-        },
-        {
-          selector: 'node[risk_tier = "critical"]',
-          style: { 'background-color': '#ef4444', 'border-color': '#fee2e2', 'border-width': 3 }
-        },
-        {
-          selector: 'node[risk_tier = "high"]',
-          style: { 'background-color': '#f97316', 'border-color': '#ffedd5' }
-        },
-        {
-          selector: 'node[risk_tier = "medium"]',
-          style: { 'background-color': '#eab308' }
-        },
-        {
-          selector: 'node[risk_tier = "low"]',
-          style: { 'background-color': '#10b981' }
-        },
-        {
-          selector: 'edge',
-          style: {
-            'width': 'mapData(weight, 1, 10, 1.5, 6)',
-            'line-color': '#475569',
-            'target-arrow-color': '#475569',
-            'target-arrow-shape': 'triangle',
-            'curve-style': 'bezier',
-            'arrow-scale': 0.9,
-            'opacity': 0.7
-          }
-        },
-        {
-          selector: ':selected',
-          style: {
-            'border-width': 4,
-            'border-color': '#38bdf8',
-            'line-color': '#38bdf8',
-            'target-arrow-color': '#38bdf8'
-          }
-        }
-      ],
-      layout: {
-        name: 'cose-bilkent',
-        animate: false,
-        nodeDimensionsIncludeLabels: true,
-        idealEdgeLength: 100,
-        nodeRepulsion: 4500
-      }
-    });
+  useEffect(() => {
+    const cy = cyRef.current
+    if (!cy) return
+    cy.elements().removeClass('hl faded')
+    if (highlightIds?.length) {
+      const set = new Set(highlightIds)
+      cy.elements().addClass('faded')
+      cy.nodes().filter(nd => set.has(nd.id())).removeClass('faded').addClass('hl')
+      cy.edges().filter(e => set.has(e.source().id()) && set.has(e.target().id())).removeClass('faded').addClass('hl')
+    }
+  }, [highlightIds])
 
-    cyRef.current.on('tap', 'node', (evt) => {
-      onSelectNode(evt.target.data());
-    });
-
-    cyRef.current.on('tap', (evt) => {
-      if (evt.target === cyRef.current) {
-        onSelectNode(null);
-      }
-    });
-
-    return () => {
-      cyRef.current?.destroy();
-    };
-  }, [elements, onSelectNode]);
-
-  return <div ref={containerRef} className="w-full h-full bg-slate-950" />;
-};
+  return <div ref={containerRef} className="h-full w-full bg-base" />
+}
