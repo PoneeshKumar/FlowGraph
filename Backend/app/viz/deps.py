@@ -21,6 +21,7 @@ async def startup() -> None:
     await _neo4j.init_constraints()   # idempotent; adds the ts/community indexes
     _pg = PostgresClient()
     await _pg.initialize()
+    await _pg.ensure_app_meta_table()   # migration 004, idempotent
     from app.viz import truth
     truth.preload()      # parse ground-truth labels once, off the request path
 
