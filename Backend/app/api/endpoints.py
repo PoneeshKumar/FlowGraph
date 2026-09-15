@@ -2,8 +2,10 @@
 from typing import Optional
 
 from fastapi import APIRouter, Query, HTTPException
-from app.services import stats_service
+from app.services import stats_service, alerts_service
 from app.services.graph_service import GraphService
+from app.schemas.api import AlertPage, AlertOut, AlertStatusUpdate
+from app.viz import deps as viz_deps
 from app.services.ai_enrichment import AIEnrichmentService
 from app.schemas.graph import GraphElements, FlowSummaryResponse, AIReportResponse
 from app.services.risk_aggregator import RiskAggregator, RiskVerdict
@@ -67,3 +69,22 @@ async def stats_volume_series(
         return stats_service.cache.series(currency, period)
     except KeyError:
         raise HTTPException(status_code=404, detail=f"unknown currency: {currency}")
+
+
+@router.get("/alerts", response_model=AlertPage)
+async def list_alerts(
+    flag_type: Optional[str] = Query(None, pattern="^[A-Z_]{2,20}$"),
+    min_level: str = Query("low", pattern="^(low|medium|high|critical)$"),
+    status: Optional[str] = Query("open", pattern="^(open|reviewed|dismissed|escalated)$"),
+    limit: int = Query(100, ge=1, le=500),
+    offset: int = Query(0, ge=0),
+):
+    return await alerts_service.list_alerts(viz_deps.pg(), flag_type, min_level, status, limit, offset)
+
+
+@router.patch("/alerts/{flag_id}/status", response_model=AlertOut)
+async def update_alert_status(flag_id: int, body: AlertStatusUpdate):
+    row = await alerts_service.set_status(viz_deps.pg(), flag_id, body.status)
+    if row is None:
+        raise HTTPException(status_code=404, detail="no such alert")
+    return row
