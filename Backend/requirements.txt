@@ -2,8 +2,8 @@
 faust==1.10.4
 robinhood-aiokafka==1.1.6
 
-# Data validation and models
-pydantic==2.8.2
+# Data validation and models (ollama requires pydantic>=2.9; the suite is verified on 2.13.5)
+pydantic==2.13.5
 
 # Configuration management
 python-dotenv==1.0.1
