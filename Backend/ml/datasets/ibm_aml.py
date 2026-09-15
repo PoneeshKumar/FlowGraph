@@ -131,9 +131,38 @@ def load_pattern_accounts(
     return accounts, len(groups), per_typology
 
 
+async def reset_stores(neo4j_client: Any, redis_client: Optional[Any], batch_size: int = 20_000) -> None:
+    """Wipe the graph so a reload does not inflate FLOWS_TO aggregates.
+
+    FLOWS_TO aggregates are incremented on MATCH, so loading the same rows twice
+    doubles tx_count and total_amount. Relationships are deleted BEFORE nodes, in
+    two batched phases: DETACH DELETE on a hub with ~14k relationships exceeds
+    Neo4j's per-transaction memory limit on the loaded HI-Small graph.
+    """
+    from config import NEO4J_DATABASE
+    logger.warning("reset: deleting all relationships, then all nodes")
+    phases = (
+        ("relationships", "MATCH ()-[r]->() WITH r LIMIT $batch_size DELETE r RETURN count(*) AS n"),
+        ("nodes", "MATCH (n) WITH n LIMIT $batch_size DETACH DELETE n RETURN count(*) AS n"),
+    )
+    async with neo4j_client.driver.session(database=NEO4J_DATABASE) as session:
+        for label, query in phases:
+            total = 0
+            while True:
+                record = await (await session.run(query, batch_size=batch_size)).single()
+                deleted = int(record["n"]) if record else 0
+                total += deleted
+                if not deleted:
+                    break
+            logger.info("  deleted %d %s", total, label)
+    if redis_client is not None:
+        await redis_client.client.flushdb()
+        logger.info("  redis flushed")
+
+
 async def ingest_for_training(
     csv_path: Union[str, Path],
-    patterns_path: Union[str, Path],
+    patterns_path: Optional[Union[str, Path]],
     neo4j_client: Any,
     redis_client: Optional[Any] = None,
     typologies: Iterable[str] = ALL_TYPOLOGIES,
@@ -185,9 +214,10 @@ async def ingest_for_training(
         raise ValueError(f"batch_size must be >= 1, got {batch_size}")
 
     stats = TrainingIngestStats()
-    pattern_accounts, group_count, per_typology = load_pattern_accounts(
-        patterns_path, typologies
-    )
+    if patterns_path is None:          # an unlabelled upload: everything is background
+        pattern_accounts, group_count, per_typology = set(), 0, {}
+    else:
+        pattern_accounts, group_count, per_typology = load_pattern_accounts(patterns_path, typologies)
     stats.pattern_accounts = len(pattern_accounts)
     stats.groups_loaded = group_count
     stats.typology_counts = per_typology

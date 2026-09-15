@@ -27,6 +27,21 @@ def event_loop() -> Generator:
     loop.close()
 
 
+@pytest.fixture(autouse=True)
+def _restore_session_loop(event_loop):
+    """Keep test order from mattering.
+
+    A test that drives a coroutine with ``asyncio.run()`` leaves the policy's
+    current loop unset when it finishes; on Python 3.9 the next
+    ``@pytest.mark.asyncio`` test then fails with "There is no current event
+    loop" — but only if it happens to sort after that test. Re-installing the
+    session loop before every test removes the ordering dependence.
+    """
+    if not event_loop.is_closed():
+        asyncio.set_event_loop(event_loop)
+    yield
+
+
 @pytest.fixture
 def sample_card_auth_event() -> Dict[str, Any]:
     """Sample valid CardAuthEvent payload."""

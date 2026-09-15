@@ -6,8 +6,14 @@ class Settings(BaseSettings):
     PROJECT_NAME: str = "FlowGraph Intelligence Engine"
     API_V1_STR: str = "/api"
 
-    # CORS — explicit dev origins (Vite dev server, CRA). Override in prod.
-    BACKEND_CORS_ORIGINS: List[str] = ["http://localhost:5173", "http://localhost:3000"]
+    # CORS — an explicit allow-list, never a credentialed wildcard: that would let
+    # any origin make authenticated cross-origin calls. Add your deployed frontend
+    # here in prod.
+    BACKEND_CORS_ORIGINS: List[str] = []
+    # Loopback on ANY port is also allowed, because Vite silently moves to the next
+    # free port when 5173 is taken and a self-hoster should not have to chase it.
+    # Localhost-only, so this is not a wildcard.
+    BACKEND_CORS_ORIGIN_REGEX: str = r"^https?://(localhost|127\.0\.0\.1)(:\d+)?$"
     
     # Storage & Drivers
     NEO4J_URI: str = "bolt://localhost:7687"
@@ -20,6 +26,13 @@ class Settings(BaseSettings):
     # LLM API
     ANTHROPIC_API_KEY: str = ""
 
+    # --- Explanation service (app/services/explanation_service.py) ---
+    # LLM_PROVIDER: "anthropic" | "ollama" | "none" | "" (auto: key → anthropic,
+    # else a reachable Ollama, else none). LLM_MODEL defaults per provider.
+    LLM_PROVIDER: str = ""
+    LLM_MODEL: str = ""
+    OLLAMA_BASE_URL: str = "http://localhost:11434"
+
     # --- Community visualiser (/viz) ---
     GNN_RUN_DIR: str = "ml/runs/v10_L3"
     # Extra checkpoints averaged with GNN_RUN_DIR into a seed ensemble. Averaging
@@ -31,6 +44,13 @@ class Settings(BaseSettings):
     GNN_FEATURE_CACHE: str = "ml/cache/featureset_v4.npz"
     MARK_GNN_THRESHOLD: float = 0.5
     CYCLE_MAX_SEEDS: int = 500
+
+    # --- "Analyze a file" dataset upload (app/services/dataset_runner.py) ---
+    UPLOAD_DIR: str = "uploads"
+    UPLOAD_MAX_MB: int = 500
+    # Features rebuilt from the stores for an uploaded graph land here and become
+    # the runner's cache until the next upload.
+    GNN_FEATURE_CACHE_UPLOAD: str = "ml/cache/featureset_upload.npz"
 
     # --- Live per-event GNN scoring (outbox hook) ---
     # Off by default: when enabled, each outbox sync cycle re-scores the accounts

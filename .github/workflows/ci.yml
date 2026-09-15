@@ -1,0 +1,52 @@
+name: CI
+
+on:
+  push:
+    branches: [main, showcase-and-ship]
+  pull_request:
+
+jobs:
+  backend:
+    name: Backend tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          # The project runs on 3.9 (networkx 3.2.1 is the last release that
+          # supports it, and the ML stack is pinned around that).
+          python-version: "3.9"
+          cache: pip
+      - name: Install dependencies
+        working-directory: Backend
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+      - name: Run tests
+        working-directory: Backend
+        # Tests that need Neo4j/Postgres/Redis or the Kaggle datasets skip
+        # themselves when those are unreachable, so no services are needed here.
+        run: python -m pytest -q
+
+  frontend:
+    name: Frontend lint, tests, build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: Frontend/package-lock.json
+      - name: Install dependencies
+        working-directory: Frontend
+        run: npm ci
+      - name: Lint
+        working-directory: Frontend
+        run: npm run lint
+      - name: Unit tests
+        working-directory: Frontend
+        run: npm test
+      - name: Build (demo mode — uses the bundled snapshot)
+        working-directory: Frontend
+        run: npm run build

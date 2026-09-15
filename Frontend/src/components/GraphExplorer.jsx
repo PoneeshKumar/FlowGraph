@@ -1,180 +1,81 @@
-import React, { useState, useEffect, useCallback } from 'react';
-import { GraphCanvas } from './GraphCanvas';
-import { InspectorSidebar } from './InspectorSidebar';
-import { apiClient } from '../services/api';
+import { useEffect, useMemo, useState } from 'react'
+import { GraphCanvas } from './GraphCanvas'
+import { InspectorSidebar } from './InspectorSidebar'
+import GraphTools from './GraphTools'
+import { Skeleton, ErrorNote, DemoNote, EmptyNote } from './ui'
+import { useDataSource } from '../services/DataSourceProvider'
+import { useAsync } from '../hooks/useAsync'
+import { NotInSnapshotError } from '../services/dataSource'
+import { shortId } from '../lib/format'
 
-export default function GraphExplorer({ onNav, navContext }) {
-  const [elements, setElements] = useState({ nodes: [], edges: [] });
-  const [selectedNode, setSelectedNode] = useState(null);
-  const [searchAccount, setSearchAccount] = useState('');
-  const [depth, setDepth] = useState(2);
-  const [loading, setLoading] = useState(false);
-  const [businessId, setBusinessId] = useState('');
-  const [businessQuestion, setBusinessQuestion] = useState('What are the most important risk concerns?');
-  const [businessSummary, setBusinessSummary] = useState(null);
-  const [summaryLoading, setSummaryLoading] = useState(false);
-  const [summaryError, setSummaryError] = useState('');
+const LENSES = [['risk', 'Risk tier'], ['gnn', 'GNN heat'], ['community', 'Community'], ['pagerank', 'PageRank']]
 
-  const fetchGraph = useCallback(async (accountId, hopDepth) => {
-    if (!accountId) return;
-    setLoading(true);
-    try {
-      const data = await apiClient.getSubgraph(accountId.trim(), hopDepth);
-      setElements(data);
-      if (data.nodes?.length > 0) {
-        const match = data.nodes.find((n) => n.data.id === accountId.trim());
-        setSelectedNode(match ? match.data : data.nodes[0].data);
-      }
-    } catch (err) {
-      console.error('Failed to load subgraph:', err);
-    } finally {
-      setLoading(false);
-    }
-  }, []);
+export default function GraphExplorer({ onNav, params }) {
+  const { source, mode } = useDataSource()
+  const target = params?.account || ''
+  const depth = Number(params?.depth || 2)
+  const [query, setQuery] = useState(target)
+  const [lens, setLens] = useState('risk')
+  const [selected, setSelected] = useState(null)
+  const [pathIds, setPathIds] = useState(null)
 
+  const featured = useAsync(() => source.featured(), [source.mode])
+  const graph = useAsync(() => (target ? source.graph.subgraph(target, depth) : Promise.resolve(null)), [source.mode, target, depth])
+  const elements = useMemo(() => graph.data || { nodes: [], edges: [] }, [graph.data])
+
+  // Never land on an empty canvas: open the richest featured neighbourhood by default.
   useEffect(() => {
-    const targetId = navContext?.accountId || navContext?.id;
-    if (targetId) {
-      setSearchAccount(targetId);
-      fetchGraph(targetId, depth);
-    }
-  }, [navContext, depth, fetchGraph]);
+    if (!target && featured.data?.length) onNav('graph', { account: featured.data[0], depth })
+  }, [target, featured.data, onNav, depth])
 
-  const handleSearch = (e) => {
-    e.preventDefault();
-    if (searchAccount.trim()) {
-      fetchGraph(searchAccount, depth);
-    }
-  };
+  const go = (id, d = depth) => { setSelected(null); setPathIds(null); onNav('graph', { account: id, depth: d }) }
+  const onPath = (p) => setPathIds(p.nodes.map(n => n.data.id))
 
-  const handleBusinessSummary = async (e) => {
-    e.preventDefault();
-    if (!businessId.trim() || !businessQuestion.trim()) return;
-
-    setSummaryLoading(true);
-    setSummaryError('');
-    try {
-      const data = await apiClient.getBusinessSummary(
-        businessId.trim(),
-        businessQuestion.trim(),
-      );
-      setBusinessSummary(data);
-    } catch (err) {
-      setBusinessSummary(null);
-      setSummaryError(err.response?.data?.detail || 'Unable to generate a business summary.');
-    } finally {
-      setSummaryLoading(false);
-    }
-  };
-
-  const handleNodeUpdated = (updatedNodeData) => {
-    setSelectedNode(updatedNodeData);
-    setElements((prev) => ({
-      ...prev,
-      nodes: prev.nodes.map((node) =>
-        node.data.id === updatedNodeData.id
-          ? { ...node, data: { ...node.data, ...updatedNodeData } }
-          : node
-      )
-    }));
-  };
   return (
-    <div className="flex h-full w-full bg-slate-950 text-slate-100 overflow-hidden">
-      <div className="flex-1 flex flex-col h-full min-w-0">
-        <header className="h-14 bg-slate-900/80 backdrop-blur border-b border-slate-800 px-6 flex items-center justify-between z-10">
-          <div className="flex items-center space-x-3">
-            <span className="text-xs font-semibold uppercase tracking-wider text-slate-400">
-              Live Topology Viewer
-            </span>
-          </div>
-
-          <form onSubmit={handleSearch} className="flex items-center space-x-2">
-            <input
-              type="text"
-              placeholder="Search account ID / hash..."
-              value={searchAccount}
-              onChange={(e) => setSearchAccount(e.target.value)}
-              className="bg-slate-950 border border-slate-700 px-3 py-1.5 rounded text-xs w-72 focus:outline-none focus:border-sky-500 font-mono text-slate-200"
-            />
-            <select
-              value={depth}
-              onChange={(e) => setDepth(Number(e.target.value))}
-              className="bg-slate-950 border border-slate-700 px-2 py-1.5 rounded text-xs focus:outline-none text-slate-300"
-            >
-              <option value={1}>1-hop</option>
-              <option value={2}>2-hop</option>
-              <option value={3}>3-hop</option>
+    <div className="flex h-full min-w-0">
+      <div className="flex min-w-0 flex-1 flex-col">
+        <div className="flex shrink-0 flex-wrap items-center gap-4 px-8 pb-3 pt-1">
+          <form onSubmit={e => { e.preventDefault(); if (query.trim()) go(query.trim()) }}
+            className="flex items-center gap-2 border-b border-line py-1 focus-within:border-line-2">
+            <input value={query} onChange={e => setQuery(e.target.value)} placeholder="Account id…"
+              className="w-72 bg-transparent font-mono text-xs text-ink outline-none placeholder:text-ink-4" />
+            <select value={depth} onChange={e => target && go(target, Number(e.target.value))} className="bg-transparent text-[11px] text-ink-3 outline-none">
+              {[1, 2, 3].map(d => <option key={d} value={d}>{d}-hop</option>)}
             </select>
-            <button
-              type="submit"
-              disabled={loading}
-              className="bg-sky-600 hover:bg-sky-500 disabled:bg-slate-800 px-3.5 py-1.5 rounded text-xs font-semibold text-white transition-colors"
-            >
-              {loading ? 'Fetching...' : 'Traverse'}
-            </button>
+            <button type="submit" className="text-[12px] font-medium text-accent hover:opacity-70">Explore</button>
           </form>
-        </header>
-        <section className="border-b border-slate-800 bg-slate-900/60 px-6 py-3">
-          <form onSubmit={handleBusinessSummary} className="flex items-end gap-3">
-            <label className="w-56">
-              <span className="mb-1 block text-[10px] font-semibold uppercase tracking-wider text-slate-500">
-                Business ID
-              </span>
-              <input
-                type="text"
-                placeholder="business-001"
-                value={businessId}
-                onChange={(e) => setBusinessId(e.target.value)}
-                className="w-full rounded border border-slate-700 bg-slate-950 px-3 py-2 text-xs font-mono text-slate-200 focus:border-sky-500 focus:outline-none"
-              />
-            </label>
-            <label className="min-w-0 flex-1">
-              <span className="mb-1 block text-[10px] font-semibold uppercase tracking-wider text-slate-500">
-                Ask the AI about this business
-              </span>
-              <input
-                type="text"
-                value={businessQuestion}
-                onChange={(e) => setBusinessQuestion(e.target.value)}
-                className="w-full rounded border border-slate-700 bg-slate-950 px-3 py-2 text-xs text-slate-200 focus:border-sky-500 focus:outline-none"
-              />
-            </label>
-            <button
-              type="submit"
-              disabled={summaryLoading || !businessId.trim() || !businessQuestion.trim()}
-              className="rounded bg-amber-600 px-3.5 py-2 text-xs font-semibold text-white transition-colors hover:bg-amber-500 disabled:bg-slate-800 disabled:text-slate-500"
-            >
-              {summaryLoading ? 'Analyzing...' : 'Ask AI'}
-            </button>
-          </form>
-          {summaryError && <p className="mt-2 text-xs text-red-400">{summaryError}</p>}
-          {businessSummary && (
-            <div className="mt-3 max-w-4xl border-l-2 border-amber-500 pl-3">
-              <p className="text-[10px] font-semibold uppercase tracking-wider text-amber-400">
-                Business {businessSummary.business_id} · {businessSummary.generated_by}
-              </p>
-              <p className="mt-1 text-sm leading-relaxed text-slate-200">{businessSummary.summary}</p>
-            </div>
-          )}
-        </section>
-        <div className="flex-1 relative min-h-0">
-          <GraphCanvas elements={elements} onSelectNode={setSelectedNode} />
+          <div className="flex items-center gap-4">
+            {LENSES.map(([id, label]) => (
+              <button key={id} type="button" onClick={() => setLens(id)} className={`text-[12px] ${lens === id ? 'font-semibold text-ink' : 'text-ink-3 hover:text-ink-2'}`}>{label}</button>
+            ))}
+          </div>
+          {graph.data && <span className="ml-auto font-mono text-[11px] text-ink-4 tnum">{elements.nodes.length} accounts · {elements.edges.length} flows</span>}
+        </div>
 
-          {(!elements.nodes || elements.nodes.length === 0) && !loading && (
-            <div className="absolute inset-0 flex items-center justify-center pointer-events-none">
-              <p className="text-slate-600 text-xs tracking-wide">
-                Search an account hash to inspect graph flow topology
-              </p>
-            </div>
-          )}
+        {featured.data?.length > 0 && (
+          <div className="flex shrink-0 flex-wrap items-center gap-2 px-8 pb-3">
+            <span className="text-[11px] text-ink-4">{mode === 'demo' ? 'Featured accounts in this snapshot:' : 'Try:'}</span>
+            {featured.data.slice(0, 12).map(id => (
+              <button key={id} type="button" onClick={() => { setQuery(id); go(id) }}
+                className={`rounded-full px-2 py-0.5 font-mono text-[10.5px] ${id === target ? 'bg-accent/10 text-accent' : 'bg-hover text-ink-2 hover:text-ink'}`}>{shortId(id)}</button>
+            ))}
+          </div>
+        )}
+
+        <div className="relative min-h-0 flex-1 border-t border-line">
+          {graph.error instanceof NotInSnapshotError ? <div className="p-8"><DemoNote>{graph.error.message}</DemoNote></div>
+            : graph.error ? <div className="p-8"><ErrorNote error={graph.error} onRetry={graph.reload} /></div>
+            : graph.loading && target ? <div className="p-8"><Skeleton className="h-full min-h-[300px] w-full" /></div>
+            : !target ? <EmptyNote>Search an account id, or pick a featured account, to draw its neighbourhood.</EmptyNote>
+            : elements.nodes.length === 0 ? <EmptyNote>No flows found around {shortId(target)}.</EmptyNote>
+            : <GraphCanvas elements={elements} lens={lens} selectedId={selected?.id} onSelectNode={setSelected} highlightIds={pathIds} />}
+          <div className="glass absolute bottom-4 left-4 w-[300px] rounded-lg p-4">
+            <GraphTools key={target} source={source} defaultA={target} onPath={onPath} />
+          </div>
         </div>
       </div>
 
-      <InspectorSidebar
-        node={selectedNode}
-        onClose={() => setSelectedNode(null)}
-        onNodeUpdated={handleNodeUpdated}
-      />
+      <InspectorSidebar source={source} node={selected} onClose={() => setSelected(null)} onExplore={(id) => { setQuery(id); go(id) }} />
     </div>
-  );
+  )
 }
