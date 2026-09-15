@@ -216,7 +216,7 @@ export function EmptyNote({ children }) {
 export function DemoNote({ children }) {
   return (
     <div className="rounded-md border border-dashed border-line-2 px-3 py-2 text-[12px] text-ink-3">
-      {children} <a href="https://github.com/KavEn06/FlowGraph#run-it-yourself" className="font-medium text-accent hover:opacity-70">Self-host →</a>
+      {children} <a href="https://github.com/PoneeshKumar/FlowGraph#run-it-on-your-own-machine" className="font-medium text-accent hover:opacity-70">Self-host →</a>
     </div>
   )
 }
