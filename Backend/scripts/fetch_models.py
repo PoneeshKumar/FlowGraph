@@ -10,7 +10,6 @@ cycle and community signals) and `/viz` degrades gracefully. To rebuild them fro
 scratch instead, see "Reproducing the champion" in the README.
 """
 import argparse
-import shutil
 import sys
 import tarfile
 import tempfile
@@ -32,13 +31,23 @@ def _present() -> bool:
     return all((BACKEND / p).exists() for p in EXPECTED)
 
 
+_last_pct = -1
+
+
 def _report(blocks: int, block_size: int, total: int) -> None:
+    """Progress line. Redraws in place on a terminal; piped or in CI it prints one
+    line per 10% instead, so a log doesn't fill with carriage returns."""
+    global _last_pct
     if total <= 0:
         return
     done = min(blocks * block_size, total)
-    pct = 100 * done / total
-    sys.stdout.write(f"\r  {done / 1e6:5.1f} / {total / 1e6:.1f} MB ({pct:3.0f}%)")
-    sys.stdout.flush()
+    pct = int(100 * done / total)
+    if sys.stdout.isatty():
+        sys.stdout.write(f"\r  {done / 1e6:5.1f} / {total / 1e6:.1f} MB ({pct:3d}%)")
+        sys.stdout.flush()
+    elif pct >= _last_pct + 10:
+        _last_pct = pct - pct % 10
+        print(f"  {done / 1e6:5.1f} / {total / 1e6:.1f} MB ({_last_pct:3d}%)")
 
 
 def main() -> int:
@@ -59,7 +68,8 @@ def main() -> int:
         archive = Path(tmp) / ASSET
         try:
             urllib.request.urlretrieve(args.url, archive, _report)
-            print()
+            if sys.stdout.isatty():
+                print()
         except urllib.error.HTTPError as exc:
             print(f"\nDownload failed ({exc.code} {exc.reason}).")
             print(f"If the release does not exist yet, train the champion instead — see")
