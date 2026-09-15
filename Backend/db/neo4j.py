@@ -82,6 +82,14 @@ class Neo4jClient:
             "FOR (a:Account) REQUIRE a.id IS UNIQUE",
             "CREATE CONSTRAINT transfer_txn_unique IF NOT EXISTS "
             "FOR ()-[t:TRANSFER]-() REQUIRE t.txn_id IS UNIQUE",
+            # "Latest N transactions" orders 5M TRANSFER edges by ts — a full sort
+            # without this relationship index (~8 s per request with it absent).
+            "CREATE INDEX transfer_ts IF NOT EXISTS "
+            "FOR ()-[t:TRANSFER]-() ON (t.ts)",
+            # Community lookups (viz subgraph by community, explanation evidence)
+            # otherwise scan every Account.
+            "CREATE INDEX account_community IF NOT EXISTS "
+            "FOR (a:Account) ON (a.community_id)",
         ]
         async with self.driver.session(database=NEO4J_DATABASE) as session:
             for stmt in constraints:

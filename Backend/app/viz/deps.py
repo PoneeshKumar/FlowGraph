@@ -18,6 +18,7 @@ async def startup() -> None:
     global _neo4j, _pg
     _neo4j = Neo4jClient()
     await _neo4j.initialize()
+    await _neo4j.init_constraints()   # idempotent; adds the ts/community indexes
     _pg = PostgresClient()
     await _pg.initialize()
     from app.viz import truth
