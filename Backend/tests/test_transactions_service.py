@@ -45,10 +45,11 @@ def test_list_latest_parameterises_rail_and_limit():
     rows = asyncio.run(ts.list_latest(lambda: sess, limit=7, rail="CARD"))
     q, p = sess.calls[0]
     assert "t.rail = $rail" in q and p == {"limit": 7, "rail": "CARD"} and "ORDER BY t.ts DESC" in q
+    assert "t.ts IS NOT NULL" in q                      # index-backed ordering (see list_latest)
     assert rows[0]["risk_tier"] == "low" and rows[0]["flagged"] is False
     sess2 = _Sess([])
     asyncio.run(ts.list_latest(lambda: sess2, limit=3, rail=None))
-    assert "$rail" not in sess2.calls[0][0]
+    assert "$rail" not in sess2.calls[0][0] and "t.ts IS NOT NULL" in sess2.calls[0][0]
 
 
 def test_list_for_account_uses_both_directions():
