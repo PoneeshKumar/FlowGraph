@@ -2,9 +2,10 @@
 from typing import Optional
 
 from fastapi import APIRouter, Query, HTTPException
-from app.services import stats_service, alerts_service
+from app.services import stats_service, alerts_service, transactions_service
 from app.services.graph_service import GraphService
-from app.schemas.api import AlertPage, AlertOut, AlertStatusUpdate
+from app.schemas.api import AlertPage, AlertOut, AlertStatusUpdate, TransactionPage
+from app.db.neo4j import neo4j_client
 from app.viz import deps as viz_deps
 from app.services.ai_enrichment import AIEnrichmentService
 from app.schemas.graph import GraphElements, FlowSummaryResponse, AIReportResponse
@@ -88,3 +89,25 @@ async def update_alert_status(flag_id: int, body: AlertStatusUpdate):
     if row is None:
         raise HTTPException(status_code=404, detail="no such alert")
     return row
+
+
+def _rail_for(currency: Optional[str]) -> Optional[str]:
+    if not currency:
+        return None
+    from app.services.stats_service import cache
+    return (cache.rail_for(currency) if cache.ready() else None) or currency
+
+
+@router.get("/transactions", response_model=TransactionPage)
+async def list_transactions(
+    limit: int = Query(50, ge=1, le=200),
+    account_id: Optional[str] = Query(None, min_length=1, max_length=128),
+    currency: Optional[str] = Query(None, max_length=64),
+):
+    rail = _rail_for(currency)
+    session = neo4j_client.driver.session
+    if account_id:
+        items = await transactions_service.list_for_account(session, account_id, limit=limit, rail=rail)
+    else:
+        items = await transactions_service.list_latest(session, limit=limit, rail=rail)
+    return {"items": items}
