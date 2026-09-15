@@ -56,7 +56,8 @@ class RiskAggregator:
                 tier=ai_report.risk_level,
                 confidence=ai_report.confidence,
                 signals=signals,
-                explanation=f"[AI Enriched - {ai_report.detected_typology}] {ai_report.explanation}",
+                explanation=(f"[AI Enriched - {ai_report.detected_typology}] " if ai_report.detected_typology
+                             else "[AI Enriched] ") + ai_report.explanation,
                 delegated_to_ai=True
             )
 
