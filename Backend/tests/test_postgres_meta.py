@@ -72,3 +72,26 @@ def test_risk_flag_paging_count_and_status():
     assert by_type.get("TESTTYPE") == 1
     assert ids == ["t1"]
     assert updated["status"] == "reviewed" and gone is None
+
+
+def test_clear_risk_flags_removes_every_row_and_returns_count():
+    async def fn(pg):
+        # snapshot + restore so the dev graph's real flags survive this test
+        async with pg._get_connection() as conn:
+            rows = await conn.fetch("SELECT * FROM risk_flags")
+        await pg.upsert_risk_flag(flag_type="TESTTYPE", fingerprint="test:clear", account_ids=["t"],
+                                  risk_level="low", risk_score=0.1, explanation="x")
+        n = await pg.clear_risk_flags()
+        remaining = await pg.count_risk_flags()
+        async with pg._get_connection() as conn:
+            for r in rows:
+                await conn.execute(
+                    "INSERT INTO risk_flags (id, flag_type, fingerprint, account_ids, risk_level, risk_score, "
+                    "explanation, details, status, first_detected_at, last_detected_at, detection_count, created_at) "
+                    "VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13) ON CONFLICT (id) DO NOTHING",
+                    r["id"], r["flag_type"], r["fingerprint"], r["account_ids"], r["risk_level"], r["risk_score"],
+                    r["explanation"], r["details"], r["status"], r["first_detected_at"], r["last_detected_at"],
+                    r["detection_count"], r["created_at"])
+        return n, remaining, len(rows)
+    n, remaining, before = _run(fn)
+    assert n == before + 1 and remaining == 0

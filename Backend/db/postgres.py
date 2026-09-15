@@ -449,6 +449,14 @@ class PostgresClient:
             rows = await conn.fetch(query, flag_type, status)
         return [r["account_id"] for r in rows]
 
+    async def clear_risk_flags(self) -> int:
+        """Drop every flag — only for a dataset replacement, where the graph the
+        flags describe is gone. Returns the number of rows removed."""
+        async with self._get_connection() as conn:
+            n = await conn.fetchval("SELECT count(*) FROM risk_flags")
+            await conn.execute("DELETE FROM risk_flags")
+        return int(n)
+
     # ==================== APP META (key/value) ====================
 
     async def ensure_app_meta_table(self) -> None:

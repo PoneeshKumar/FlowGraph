@@ -5,12 +5,17 @@ so the account hashing matches exactly what the ingestor wrote into Neo4j — an
 the account→typology map. This lets the viewer show the *dataset's own* marks next to
 the *pipeline's* marks, tab-for-tab. Degrades to an empty set (every ``truth`` flag
 false) if the patterns file is absent, so environments without it still run.
+
+After a dataset upload, ``reload`` points the labels at the uploaded patterns file
+(or at nothing, for an unlabelled upload).
 """
 import logging
-from typing import Dict, Optional, Set
+from typing import Any, Dict, Optional, Set
 
 logger = logging.getLogger("viz.truth")
 
+DEFAULT = object()          # sentinel: the IBM patterns file at its default path
+_SOURCE: Any = DEFAULT      # DEFAULT | a Path | None (no labels)
 _TRUTH: Optional[Set[str]] = None
 _TYPOLOGY: Optional[Dict[str, str]] = None
 
@@ -21,16 +26,17 @@ def _load() -> None:
         return
     truth: Set[str] = set()
     typ_of: Dict[str, str] = {}
-    try:
-        from ml.evaluate import load_ground_truth
-        gt = load_ground_truth()
-        for typ, accounts in gt.accounts_by_typology.items():
-            for acc in accounts:
-                truth.add(acc)
-                typ_of.setdefault(acc, typ)   # an account can appear in several patterns
-        logger.info("ground truth loaded: %d dataset-marked accounts", len(truth))
-    except Exception as exc:  # noqa: BLE001 — missing/unparseable file → empty labels
-        logger.warning("ground truth unavailable (%s); dataset tab will be empty", exc)
+    if _SOURCE is not None:
+        try:
+            from ml.evaluate import load_ground_truth
+            gt = load_ground_truth() if _SOURCE is DEFAULT else load_ground_truth(patterns_path=_SOURCE)
+            for typ, accounts in gt.accounts_by_typology.items():
+                for acc in accounts:
+                    truth.add(acc)
+                    typ_of.setdefault(acc, typ)   # an account can appear in several patterns
+            logger.info("ground truth loaded: %d dataset-marked accounts", len(truth))
+        except Exception as exc:  # noqa: BLE001 — missing/unparseable file → empty labels
+            logger.warning("ground truth unavailable (%s); dataset tab will be empty", exc)
     _TRUTH, _TYPOLOGY = truth, typ_of
 
 
@@ -38,6 +44,15 @@ def preload() -> int:
     """Load labels eagerly (called at app startup). Returns the count."""
     _load()
     return len(_TRUTH or ())
+
+
+def reload(patterns_path: Any) -> int:
+    """Point the labels at a new patterns file (a Path), the IBM default
+    (``DEFAULT``), or nothing (``None``) — used after a dataset upload."""
+    global _SOURCE, _TRUTH, _TYPOLOGY
+    _SOURCE = patterns_path
+    _TRUTH = _TYPOLOGY = None
+    return preload()
 
 
 def truth_set() -> Set[str]:

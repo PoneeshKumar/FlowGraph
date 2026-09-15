@@ -39,6 +39,13 @@ class Settings(BaseSettings):
     MARK_GNN_THRESHOLD: float = 0.5
     CYCLE_MAX_SEEDS: int = 500
 
+    # --- "Analyze a file" dataset upload (app/services/dataset_runner.py) ---
+    UPLOAD_DIR: str = "uploads"
+    UPLOAD_MAX_MB: int = 500
+    # Features rebuilt from the stores for an uploaded graph land here and become
+    # the runner's cache until the next upload.
+    GNN_FEATURE_CACHE_UPLOAD: str = "ml/cache/featureset_upload.npz"
+
     # --- Live per-event GNN scoring (outbox hook) ---
     # Off by default: when enabled, each outbox sync cycle re-scores the accounts
     # its events touched plus their bounded k-hop neighborhood. LIVE_SCORE_HOPS
