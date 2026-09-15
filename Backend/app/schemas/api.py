@@ -52,6 +52,10 @@ class TransactionPage(BaseModel):
     items: List[TransactionOut]
 
 
+class UploadAccepted(BaseModel):
+    run_id: str
+
+
 class LLMStatus(BaseModel):
     provider: str            # anthropic | ollama | none
     model: Optional[str]

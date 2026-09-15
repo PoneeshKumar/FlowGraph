@@ -1,11 +1,17 @@
 # backend/app/api/endpoints.py
+import shutil
+from pathlib import Path
 from typing import Optional
 
-from fastapi import APIRouter, Query, HTTPException
+from fastapi import APIRouter, Query, HTTPException, UploadFile, File, Form, BackgroundTasks
+from fastapi.responses import PlainTextResponse
+from app.core.config import settings
 from app.services import stats_service, alerts_service, transactions_service, explanation_service
+from app.services import dataset_validation
+from app.services.dataset_runner import DatasetRunner
 from app.services.graph_service import GraphService
 from app.schemas.api import (
-    AlertPage, AlertOut, AlertStatusUpdate, TransactionPage, ExplanationOut, LLMStatus,
+    AlertPage, AlertOut, AlertStatusUpdate, TransactionPage, ExplanationOut, LLMStatus, UploadAccepted,
 )
 from app.db.neo4j import neo4j_client
 from app.viz import deps as viz_deps
@@ -124,3 +130,80 @@ async def list_transactions(
     else:
         items = await transactions_service.list_latest(session, limit=limit, rail=rail)
     return {"items": items}
+
+
+# ---------------------------------------------------------------- datasets --
+
+@router.get("/datasets/current")
+async def dataset_current():
+    row = await viz_deps.pg().get_app_meta("dataset")
+    if row is None:
+        raise HTTPException(status_code=404, detail="no dataset recorded")
+    return row
+
+
+@router.get("/datasets/template")
+async def dataset_template():
+    return PlainTextResponse(dataset_validation.template_csv(), media_type="text/csv",
+                             headers={"Content-Disposition": 'attachment; filename="flowgraph-template.csv"'})
+
+
+def _save_upload(upload: UploadFile, dest: Path, max_bytes: int) -> int:
+    """Stream to disk with a size cap; returns bytes written."""
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    written = 0
+    with open(dest, "wb") as out:
+        while True:
+            chunk = upload.file.read(1024 * 1024)
+            if not chunk:
+                break
+            written += len(chunk)
+            if written > max_bytes:
+                out.close()
+                dest.unlink(missing_ok=True)
+                raise HTTPException(status_code=413, detail=f"file exceeds {max_bytes // (1024 * 1024)} MB")
+            out.write(chunk)
+    return written
+
+
+@router.post("/datasets/upload", response_model=UploadAccepted)
+async def dataset_upload(
+    background: BackgroundTasks,
+    transactions: UploadFile = File(...),
+    patterns: Optional[UploadFile] = File(None),
+    confirm: str = Form(""),
+):
+    """Replace the loaded graph with an uploaded transaction CSV and run the
+    pipeline on it. Validation happens before anything is touched; the wipe only
+    starts inside the background job."""
+    if confirm != "replace":
+        raise HTTPException(status_code=422, detail='confirm must be "replace" — this wipes the current graph')
+    pg = viz_deps.pg()
+    if await pg.get_active_pipeline_run():
+        raise HTTPException(status_code=409, detail="a pipeline run is already active")
+    max_bytes = int(settings.UPLOAD_MAX_MB) * 1024 * 1024
+    staging = Path(settings.UPLOAD_DIR) / "staging"
+    csv_path = staging / (transactions.filename or "transactions.csv")
+    _save_upload(transactions, csv_path, max_bytes)
+    check = dataset_validation.validate_transactions_csv(csv_path)
+    if not check["ok"]:
+        csv_path.unlink(missing_ok=True)
+        raise HTTPException(status_code=422, detail=check["error"])
+    patterns_path: Optional[Path] = None
+    if patterns is not None and patterns.filename:
+        patterns_path = staging / patterns.filename
+        _save_upload(patterns, patterns_path, max_bytes)
+
+    run_id = await pg.create_pipeline_run()
+    run_dir = Path(settings.UPLOAD_DIR) / run_id
+    run_dir.mkdir(parents=True, exist_ok=True)
+    final_csv = run_dir / csv_path.name
+    shutil.move(str(csv_path), final_csv)
+    final_patterns: Optional[Path] = None
+    if patterns_path is not None:
+        final_patterns = run_dir / patterns_path.name
+        shutil.move(str(patterns_path), final_patterns)
+
+    runner = DatasetRunner(viz_deps.neo4j(), viz_deps.redis(), pg, settings)
+    background.add_task(runner.run, run_id, final_csv, final_patterns, transactions.filename or "upload.csv")
+    return {"run_id": run_id}

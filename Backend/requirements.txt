@@ -39,6 +39,7 @@ anthropic>=0.40,<1
 ollama>=0.4,<1
 httpx>=0.27
 uvicorn[standard]==0.30.6
+python-multipart>=0.0.9   # multipart form parsing for POST /api/datasets/upload
 
 # Logging utilities
 python-json-logger==2.0.7
