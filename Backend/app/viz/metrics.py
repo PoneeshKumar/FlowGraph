@@ -8,7 +8,7 @@ pipeline run rewrites the scores.
 """
 import asyncio
 import logging
-from typing import Any, Dict, Optional
+from typing import Any, Dict, Optional  # noqa: F401 — Any is used by _lock_loop
 
 import numpy as np
 
@@ -20,7 +20,25 @@ logger = logging.getLogger("viz.metrics")
 _scores: Optional[np.ndarray] = None
 _in_cycle: Optional[np.ndarray] = None
 _labels: Optional[np.ndarray] = None
-_load_lock = asyncio.Lock()
+_load_lock: Optional[asyncio.Lock] = None
+_lock_loop: Optional[Any] = None
+
+
+def _lock() -> asyncio.Lock:
+    """The load lock, bound to the *running* loop.
+
+    A module-level asyncio.Lock() binds to whichever loop was current at import
+    time (Python 3.9), so awaiting it from another loop raises "got Future
+    attached to a different loop" — which happens as soon as both the app's
+    startup warm-up and a request can trigger a load. Rebuild it when the loop
+    changes; within one loop it is the same lock, so the race is still covered.
+    """
+    global _load_lock, _lock_loop
+    loop = asyncio.get_event_loop()
+    if _load_lock is None or _lock_loop is not loop:
+        _load_lock = asyncio.Lock()
+        _lock_loop = loop
+    return _load_lock
 
 
 def invalidate() -> None:
@@ -38,7 +56,7 @@ async def ensure_loaded(session) -> None:
     global _scores, _in_cycle, _labels
     if _scores is not None:
         return
-    async with _load_lock:
+    async with _lock():
         if _scores is not None:   # someone else won the race while we waited
             return
         query = ("MATCH (a:Account) WHERE a.gnn_risk_score IS NOT NULL OR a.in_cycle "

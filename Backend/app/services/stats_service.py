@@ -116,7 +116,24 @@ class StatsCache:
         self._dataset: Dict[str, Any] = {}
         self._latest_run: Optional[Dict[str, Any]] = None
         self._computed_at: Optional[int] = None
-        self._lock = asyncio.Lock()
+        self._lock: Optional[asyncio.Lock] = None
+        self._lock_loop: Optional[Any] = None
+
+    def _build_lock(self) -> asyncio.Lock:
+        """The build lock, bound to the *running* loop.
+
+        A lock created in __init__ binds to whichever loop was current at import
+        time (Python 3.9, module-level `cache = StatsCache()`), so awaiting it from
+        another loop raises "got Future attached to a different loop" — which
+        happens as soon as both the startup warm-up and a request can trigger a
+        build. Rebuild it when the loop changes; within one loop it is the same
+        lock, so the race is still covered.
+        """
+        loop = asyncio.get_event_loop()
+        if self._lock is None or self._lock_loop is not loop:
+            self._lock = asyncio.Lock()
+            self._lock_loop = loop
+        return self._lock
 
     # -- lifecycle ------------------------------------------------------------
     def ready(self) -> bool:
@@ -126,7 +143,7 @@ class StatsCache:
         self._computed_at = None
 
     async def build(self, session: Callable[[], Any], pg: Any) -> None:
-        async with self._lock:
+        async with self._build_lock():
             hist: Dict[str, Dict[int, Tuple[int, int]]] = {}
             counts: Dict[str, int] = {}
             async with session() as s:
