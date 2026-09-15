@@ -13,7 +13,8 @@ from config import NEO4J_DATABASE
 from fraud.community_detector import CommunityDetector
 from fraud.cycle_detector import CycleDetector
 from ml.ensemble import ensemble_scores
-from ml.train import load_feature_cache
+from ml.features import FeatureBuilder
+from ml.train import load_feature_cache, save_feature_cache
 from ml.predict import risk_level
 from app.viz.aggregate import aggregate_account, MarkWeights, MarkThresholds
 
@@ -23,10 +24,12 @@ STAGES = ["pagerank", "louvain", "cycle", "gnn", "aggregate"]
 
 
 class PipelineRunner:
-    def __init__(self, neo4j, postgres, settings):
+    def __init__(self, neo4j, postgres, settings, redis=None, feature_source: str = "cache"):
         self.neo4j = neo4j
         self.pg = postgres
+        self.redis = redis
         self.s = settings
+        self.feature_source = feature_source   # "cache" (IBM .npz) | "live" (rebuild from stores)
         self._stage = None
 
     async def run(self, run_id: str) -> None:
@@ -107,14 +110,22 @@ class PipelineRunner:
     async def _gnn(self, run_id):
         await self._mark(run_id, "gnn", 0.7)
         run_dir = Path(self.s.GNN_RUN_DIR)
-        cache = Path(self.s.GNN_FEATURE_CACHE)
-        if not run_dir.exists() or not cache.exists():
-            logger.warning(
-                "GNN artifacts missing (run_dir=%s, cache=%s) — skipping GNN stage; "
-                "marks fall back to cycle + community signals",
-                run_dir.exists(), cache.exists())
+        if not run_dir.exists():
+            logger.warning("GNN checkpoint missing (%s) — skipping GNN stage; "
+                           "marks fall back to cycle + community signals", run_dir)
             return {}
-        feature_set = load_feature_cache(cache)
+        if self.feature_source == "live":
+            feature_set = await self._build_live_features()
+            upload_cache = Path(self.s.GNN_FEATURE_CACHE_UPLOAD)
+            save_feature_cache(feature_set, upload_cache)
+            self.s.GNN_FEATURE_CACHE = str(upload_cache)   # later plain runs reuse it
+        else:
+            cache = Path(self.s.GNN_FEATURE_CACHE)
+            if not cache.exists():
+                logger.warning("GNN feature cache missing (%s) — skipping GNN stage; "
+                               "marks fall back to cycle + community signals", cache)
+                return {}
+            feature_set = load_feature_cache(cache)
         # Ensemble members are optional artifacts (ml/runs is gitignored); skip any
         # that aren't on disk so serving falls back to the single champion instead
         # of crashing. ensemble_scores of one member == that member's scores.
@@ -126,6 +137,15 @@ class PipelineRunner:
         mapping = {nid: float(sc) for nid, sc in zip(feature_set.node_ids, scores)}
         await self.neo4j.write_gnn_scores(mapping, tier_of=risk_level)
         return mapping
+
+    async def _build_live_features(self):
+        """FeatureSet from the stores — for an uploaded graph the IBM .npz is wrong.
+        Anchored at the 99.9th-percentile edge timestamp so a historical file isn't
+        filtered out as stale (same rule as ml/train.build_feature_set)."""
+        anchor = await self.neo4j.get_flows_to_timestamp(percentile=0.999)
+        reference = datetime.fromtimestamp(anchor, tz=timezone.utc) if anchor else None
+        builder = FeatureBuilder(self.neo4j, self.redis, self.pg)
+        return await builder.build(window_days=3650, reference_time=reference, export_timeout_seconds=3600.0)
 
     async def _aggregate(self, run_id, gnn_scores, cycle_members):
         await self._mark(run_id, "aggregate", 0.9)

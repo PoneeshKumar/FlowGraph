@@ -153,3 +153,34 @@ async def test_gnn_skips_gracefully_when_artifacts_missing():
     assert last["status"] == "completed"            # completes without the GNN
     neo4j.write_gnn_scores.assert_not_awaited()      # GNN stage skipped
     assert last["counts"]["marked"] == 1             # 'a' still marked via cycle signal
+
+
+@pytest.mark.asyncio
+async def test_gnn_live_feature_source_builds_and_repoints_cache(tmp_path, monkeypatch):
+    import numpy as np
+    from types import SimpleNamespace
+    from unittest.mock import AsyncMock, MagicMock
+    from app.viz.runner import PipelineRunner
+    run_dir = tmp_path / "run"; run_dir.mkdir()
+    upload_cache = tmp_path / "featureset_upload.npz"
+    settings = SimpleNamespace(GNN_RUN_DIR=str(run_dir), GNN_ENSEMBLE_RUNS=[],
+                               GNN_FEATURE_CACHE=str(tmp_path / "stale.npz"),
+                               GNN_FEATURE_CACHE_UPLOAD=str(upload_cache), CYCLE_MAX_SEEDS=5)
+    fs = SimpleNamespace(node_ids=["a", "b"], x=np.zeros((2, 47), dtype=np.float32), y=np.zeros(2, dtype=np.int64),
+                         labelled_mask=np.zeros(2, dtype=bool), edge_index=np.zeros((2, 0), dtype=np.int64),
+                         edge_weight=np.zeros(0, dtype=np.float32), feature_names=["f"] * 47, node_first_ts=None)
+    built = {}
+
+    class FakeBuilder:
+        def __init__(self, n, r, p): built["clients"] = (n, r, p)
+        async def build(self, **kw): built["kw"] = kw; return fs
+
+    neo4j = MagicMock(get_flows_to_timestamp=AsyncMock(return_value=1663000000), write_gnn_scores=AsyncMock())
+    pg = MagicMock(update_pipeline_run=AsyncMock())
+    monkeypatch.setattr("app.viz.runner.FeatureBuilder", FakeBuilder)
+    monkeypatch.setattr("app.viz.runner.ensemble_scores", lambda dirs, feature_set: np.array([0.2, 0.9]))
+    runner = PipelineRunner(neo4j, pg, settings, redis="REDIS", feature_source="live")
+    scores = await runner._gnn("rid")
+    assert scores == {"a": 0.2, "b": 0.9}
+    assert built["clients"] == (neo4j, "REDIS", pg) and built["kw"]["reference_time"] is not None
+    assert upload_cache.exists() and settings.GNN_FEATURE_CACHE == str(upload_cache)
