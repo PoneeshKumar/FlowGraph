@@ -43,6 +43,7 @@ const STATUS_TONE = {
   reviewing:          'medium',
   delayed:            'medium',
   cleared:            'low',
+  settled:            'low',
   processing:         'low',
   authorized:         'low',
   submitted:          'neutral',
@@ -187,5 +188,35 @@ export function TH({ children, className = '', ...props }) {
     >
       {children}
     </th>
+  )
+}
+
+/** Grey placeholder block while data loads. */
+export function Skeleton({ className = '' }) {
+  return <div className={`animate-pulse rounded bg-hover ${className}`} aria-hidden="true" />
+}
+
+/** Inline error with optional retry. */
+export function ErrorNote({ error, onRetry }) {
+  const msg = error?.response?.data?.detail || error?.message || 'Something went wrong.'
+  return (
+    <div className="flex items-center gap-3 rounded-md border border-line-2 px-3 py-2 text-[12px] text-ink-2">
+      <span className="h-1.5 w-1.5 shrink-0 rounded-full bg-critical" />
+      <span className="min-w-0 flex-1">{msg}</span>
+      {onRetry && <button type="button" onClick={onRetry} className="font-medium text-accent hover:opacity-70">Retry</button>}
+    </div>
+  )
+}
+
+export function EmptyNote({ children }) {
+  return <p className="px-1 py-6 text-center text-[12px] text-ink-4">{children}</p>
+}
+
+/** Shown where a feature needs a live backend (demo mode). */
+export function DemoNote({ children }) {
+  return (
+    <div className="rounded-md border border-dashed border-line-2 px-3 py-2 text-[12px] text-ink-3">
+      {children} <a href="https://github.com/PoneeshKumar/FlowGraph#run-it-on-your-own-machine" className="font-medium text-accent hover:opacity-70">Self-host →</a>
+    </div>
   )
 }

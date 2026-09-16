@@ -1,11 +1,15 @@
 import { motion } from 'motion/react'
 import { useState } from 'react'
+import ModePill from './ModePill'
+import { useDataSource } from '../services/DataSourceProvider'
 
 const NAV = [
-  { id: 'dashboard',    label: 'Overview' },
+  { id: 'overview',     label: 'Overview' },
   { id: 'graph',        label: 'Graph' },
-  { id: 'alerts',       label: 'Alerts', badge: 17 },
+  { id: 'alerts',       label: 'Alerts' },
   { id: 'transactions', label: 'Transactions' },
+  { id: 'pipeline',     label: 'Pipeline' },
+  { id: 'upload',       label: 'Upload', liveOnly: true },
 ]
 
 // Live graph mark — still when idle; rotates + drifts on hover
@@ -88,14 +92,16 @@ function FlowLogo({ active }) {
   )
 }
 
-export default function Sidebar({ active, onNav }) {
+export default function Sidebar({ active, onNav, alertCount }) {
   const [logoHover, setLogoHover] = useState(false)
+  const { mode } = useDataSource()
+  const items = NAV.filter(item => !item.liveOnly || mode === 'live')
 
   return (
     <header className="relative z-10 flex shrink-0 items-center gap-8 px-8 py-4">
       {/* Wordmark */}
       <button
-        onClick={() => onNav('dashboard')}
+        onClick={() => onNav('overview')}
         onMouseEnter={() => setLogoHover(true)}
         onMouseLeave={() => setLogoHover(false)}
         className="flex shrink-0 items-center gap-2.5"
@@ -106,8 +112,9 @@ export default function Sidebar({ active, onNav }) {
 
       {/* Horizontal nav — underline active, no pills or boxes */}
       <nav className="flex min-w-0 flex-1 items-center gap-6">
-        {NAV.map(item => {
+        {items.map(item => {
           const isActive = active === item.id
+          const badge = item.id === 'alerts' && alertCount ? alertCount : null
           return (
             <button
               key={item.id}
@@ -116,8 +123,8 @@ export default function Sidebar({ active, onNav }) {
                 ${isActive ? 'font-semibold text-ink' : 'font-normal text-ink-3 hover:text-ink-2'}`}
             >
               {item.label}
-              {item.badge && (
-                <span className="font-mono text-[10px] font-bold text-critical tnum">{item.badge}</span>
+              {badge != null && (
+                <span className="font-mono text-[10px] font-bold text-critical tnum">{badge.toLocaleString()}</span>
               )}
               {isActive && (
                 <motion.span
@@ -131,15 +138,9 @@ export default function Sidebar({ active, onNav }) {
         })}
       </nav>
 
-      {/* Stream — inline, no boxed footer */}
-      <div className="hidden shrink-0 items-center gap-3 text-[11px] text-ink-3 md:flex">
-        <span className="flex items-center gap-1.5">
-          <span className="h-1.5 w-1.5 rounded-full bg-accent [animation:pulseSoft_2.4s_ease-in-out_infinite]" />
-          Live
-        </span>
-        <span className="font-mono text-accent tnum">847/s</span>
-        <span className="text-ink-4">·</span>
-        <span className="font-mono tnum">42ms lag</span>
+      {/* Data-source mode — live backend or bundled snapshot */}
+      <div className="hidden shrink-0 items-center md:flex">
+        <ModePill />
       </div>
     </header>
   )

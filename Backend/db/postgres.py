@@ -9,7 +9,8 @@ import asyncio
 import json
 import logging
 import uuid
-from typing import Any, Dict, List, Optional
+from pathlib import Path
+from typing import Any, Dict, List, Optional, Tuple
 from datetime import datetime, timedelta
 from contextlib import asynccontextmanager
 
@@ -334,6 +335,7 @@ class PostgresClient:
         min_level: Optional[str] = None,
         status: Optional[str] = None,
         limit: int = 100,
+        offset: int = 0,
     ) -> List[Dict[str, Any]]:
         """
         Query risk flags, optionally filtered by type, minimum level, or status.
@@ -368,6 +370,9 @@ class PostgresClient:
             conditions.append(f"status = ${len(params)}")
 
         params.append(limit)
+        limit_idx = len(params)
+        params.append(offset)
+        offset_idx = len(params)
         where = " AND ".join(conditions)
         query = f"""
         SELECT id, flag_type, fingerprint, account_ids, risk_level, risk_score,
@@ -375,13 +380,107 @@ class PostgresClient:
                detection_count, created_at
         FROM risk_flags
         WHERE {where}
-        ORDER BY last_detected_at DESC
-        LIMIT ${len(params)}
+        ORDER BY last_detected_at DESC, id DESC
+        LIMIT ${limit_idx} OFFSET ${offset_idx}
         """
 
         async with self._get_connection() as conn:
             rows = await conn.fetch(query, *params)
             return [dict(row) for row in rows]
+
+    @staticmethod
+    def _flag_conditions(
+        flag_type: Optional[str], min_level: Optional[str], status: Optional[str]
+    ) -> Tuple[str, List[Any]]:
+        """Shared WHERE clause for the list/count pair (same filters, same order)."""
+        _level_order = {"low": 1, "medium": 2, "high": 3, "critical": 4}
+        conditions = [
+            "CASE risk_level "
+            "WHEN 'low' THEN 1 WHEN 'medium' THEN 2 "
+            "WHEN 'high' THEN 3 WHEN 'critical' THEN 4 ELSE 0 END >= $1"
+        ]
+        params: List[Any] = [_level_order.get(min_level or "low", 1)]
+        if flag_type:
+            params.append(flag_type)
+            conditions.append(f"flag_type = ${len(params)}")
+        if status:
+            params.append(status)
+            conditions.append(f"status = ${len(params)}")
+        return " AND ".join(conditions), params
+
+    async def count_risk_flags(
+        self,
+        flag_type: Optional[str] = None,
+        min_level: Optional[str] = None,
+        status: Optional[str] = None,
+    ) -> int:
+        where, params = self._flag_conditions(flag_type, min_level, status)
+        async with self._get_connection() as conn:
+            return int(await conn.fetchval(f"SELECT count(*) FROM risk_flags WHERE {where}", *params))
+
+    async def update_risk_flag_status(self, flag_id: int, status: str) -> Optional[Dict[str, Any]]:
+        """Analyst workflow: open → reviewed / dismissed / escalated. Returns the
+        updated row, or None when no flag has that id."""
+        query = """
+        UPDATE risk_flags SET status = $2 WHERE id = $1
+        RETURNING id, flag_type, fingerprint, account_ids, risk_level, risk_score,
+                  explanation, details, status, first_detected_at, last_detected_at,
+                  detection_count, created_at
+        """
+        async with self._get_connection() as conn:
+            row = await conn.fetchrow(query, flag_id, status)
+        return dict(row) if row else None
+
+    async def count_open_flags_by_type(self) -> Dict[str, int]:
+        async with self._get_connection() as conn:
+            rows = await conn.fetch(
+                "SELECT flag_type, count(*) AS n FROM risk_flags WHERE status = 'open' GROUP BY flag_type"
+            )
+        return {r["flag_type"]: int(r["n"]) for r in rows}
+
+    async def get_account_ids_for_flag_type(self, flag_type: str, status: str = "open") -> List[str]:
+        """Distinct account ids carrying an open flag of one detector type (the
+        stats cache uses the AGGREGATE set to mark transactions as flagged)."""
+        query = """
+        SELECT DISTINCT unnest(account_ids) AS account_id
+        FROM risk_flags WHERE flag_type = $1 AND status = $2 ORDER BY account_id
+        """
+        async with self._get_connection() as conn:
+            rows = await conn.fetch(query, flag_type, status)
+        return [r["account_id"] for r in rows]
+
+    async def clear_risk_flags(self) -> int:
+        """Drop every flag — only for a dataset replacement, where the graph the
+        flags describe is gone. Returns the number of rows removed."""
+        async with self._get_connection() as conn:
+            n = await conn.fetchval("SELECT count(*) FROM risk_flags")
+            await conn.execute("DELETE FROM risk_flags")
+        return int(n)
+
+    # ==================== APP META (key/value) ====================
+
+    async def ensure_app_meta_table(self) -> None:
+        """Apply migration 004 (idempotent) — same self-applying convention the
+        detectors use for 002."""
+        sql = (Path(__file__).resolve().parent.parent / "migrations"
+               / "004_create_app_meta_table.sql").read_text()
+        async with self._get_connection() as conn:
+            await conn.execute(sql)
+
+    async def get_app_meta(self, key: str) -> Optional[Dict[str, Any]]:
+        async with self._get_connection() as conn:
+            raw = await conn.fetchval("SELECT value FROM app_meta WHERE key = $1", key)
+        if raw is None:
+            return None
+        return json.loads(raw) if isinstance(raw, str) else dict(raw)
+
+    async def set_app_meta(self, key: str, value: Dict[str, Any]) -> None:
+        async with self._get_connection() as conn:
+            await conn.execute(
+                "INSERT INTO app_meta (key, value, updated_at) VALUES ($1, $2::jsonb, now()) "
+                "ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value, updated_at = now()",
+                key, json.dumps(value),
+            )
 
     async def get_flagged_account_ids(
         self,

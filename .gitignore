@@ -42,10 +42,9 @@ Backend/benchmarks/results/
 # Generated dev visualiser output
 Backend/flowgraph_graph.html
 Backend/viz_shot.png
-data/
+Backend/flowgraph-data/
 *.zip
 *.csv
 
-# Markdown files
-*.md
-*.MD
+# Uploaded datasets ("Analyze a file") — never commit user data
+Backend/uploads/

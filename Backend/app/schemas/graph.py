@@ -6,9 +6,13 @@ class NodeData(BaseModel):
     id: str
     label: str
     node_type: str = "account"
-    risk_score: float = 0.0
-    risk_tier: str = "low"  # low, medium, high, critical
-    community_id: Optional[int] = None
+    risk_score: float = 0.0          # aggregator verdict if one was written, else the GNN score
+    risk_tier: str = "low"           # low, medium, high, critical
+    gnn_risk_score: Optional[float] = None
+    gnn_risk_tier: Optional[str] = None
+    in_cycle: bool = False
+    marked: bool = False             # our pipeline's mark (cycle OR GNN ≥ tuned cutoff)
+    community_id: Optional[str] = None
     pagerank_score: Optional[float] = 0.0
     attributes: Dict[str, Any] = Field(default_factory=dict)
 
@@ -40,24 +44,3 @@ class FlowSummaryResponse(BaseModel):
     tx_count: int
     avg_amount_cents: float
     path_count: int
-
-class AIReportResponse(BaseModel):
-    account_id: str
-    risk_level: str
-    confidence: float
-    explanation: str
-    detected_typology: Optional[str]
-    compliance_summary: str
-
-class BusinessSummaryRequest(BaseModel):
-    business_id: str = Field(..., min_length=1, max_length=128)
-    question: str = Field(..., min_length=1, max_length=1000)
-    risk_tier: str = Field(default="medium", pattern="^(low|medium|high|critical)$")
-    limit: int = Field(default=25, ge=1, le=100)
-
-class BusinessSummaryResponse(BaseModel):
-    business_id: str
-    question: str
-    summary: str
-    data: Dict[str, Any]
-    generated_by: str

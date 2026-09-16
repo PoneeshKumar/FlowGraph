@@ -2,8 +2,8 @@
 faust==1.10.4
 robinhood-aiokafka==1.1.6
 
-# Data validation and models
-pydantic==2.8.2
+# Data validation and models (ollama requires pydantic>=2.9; the suite is verified on 2.13.5)
+pydantic==2.13.5
 
 # Configuration management
 python-dotenv==1.0.1
@@ -33,8 +33,13 @@ aiohttp==3.10.1
 # FastAPI serving layer (graph query API — app/api)
 fastapi==0.115.0
 pydantic-settings==2.4.0
-pydantic-ai>=0.0.14
+# Explanation providers (app/services/explanation_service.py). anthropic 1.x needs
+# Python >= 3.10 — stay on 0.x while the project runs on 3.9.
+anthropic>=0.40,<1
+ollama>=0.4,<1
+httpx>=0.27
 uvicorn[standard]==0.30.6
+python-multipart>=0.0.9   # multipart form parsing for POST /api/datasets/upload
 
 # Logging utilities
 python-json-logger==2.0.7

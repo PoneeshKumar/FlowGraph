@@ -10,7 +10,9 @@ from app.core.config import settings
 from app.viz import store, deps, metrics, threshold
 from app.viz.runner import PipelineRunner
 
-router = APIRouter()
+pages = APIRouter()   # the server-rendered viewer page — mounted at /viz only
+api = APIRouter()     # JSON routes — mounted at /viz and again at /api/pipeline
+router = APIRouter()  # combined; existing imports and tests use this name
 _STATIC = Path(__file__).parent / "static"
 
 
@@ -19,7 +21,7 @@ def _session():
     return neo4j_client.driver.session
 
 
-@router.get("/")
+@pages.get("/")
 async def index():
     idx = _STATIC / "index.html"
     if not idx.exists():
@@ -27,18 +29,18 @@ async def index():
     return FileResponse(idx)
 
 
-@router.get("/communities")
+@api.get("/communities")
 async def communities(sort: str = "risk", limit: int = Query(100, le=200), offset: int = 0):
     return await store.list_communities(_session(), sort, limit, offset)
 
 
-@router.get("/overview")
+@api.get("/overview")
 async def overview(metric: str = "pagerank", limit: int = Query(600, ge=10, le=2000)):
     """Whole-graph map — induced subgraph on the top-``limit`` accounts by metric."""
     return await store.load_overview(_session(), metric=metric, limit=limit)
 
 
-@router.get("/subgraph")
+@api.get("/subgraph")
 async def subgraph(
     community_id: Optional[str] = None,
     account_id: Optional[str] = None,
@@ -52,27 +54,27 @@ async def subgraph(
         hops=hops, limit=limit)
 
 
-@router.get("/marked")
+@api.get("/marked")
 async def marked(sort: str = "score", signal: Optional[str] = None,
                  limit: int = Query(100, le=500), offset: int = 0):
     return await store.list_marked(deps.pg(), sort, signal, limit, offset)
 
 
-@router.get("/threshold")
+@api.get("/threshold")
 async def threshold_config():
     """The model's tuned mark cutoff and the slider's bounds."""
     return {"default": threshold.model_threshold(),
             "min": threshold.MIN_CUTOFF, "max": threshold.MAX_CUTOFF}
 
 
-@router.get("/metrics")
+@api.get("/metrics")
 async def metrics_at(cutoff: float = Query(..., ge=0.0, le=1.0)):
     """Whole-graph precision/recall/confusion at a given GNN cutoff."""
     await metrics.ensure_loaded(_session())
     return metrics.confusion_at(cutoff)
 
 
-@router.post("/run")
+@api.post("/run")
 async def run(background: BackgroundTasks):
     if await deps.pg().get_active_pipeline_run():
         raise HTTPException(status_code=409, detail="a pipeline run is already active")
@@ -82,14 +84,40 @@ async def run(background: BackgroundTasks):
     return {"run_id": run_id}
 
 
-@router.get("/run/latest")
+@api.get("/run/latest")
 async def run_latest():
     return await deps.pg().get_latest_pipeline_run() or {"status": "none"}
 
 
-@router.get("/run/{run_id}")
+@api.get("/run/{run_id}")
 async def run_status(run_id: str):
     row = await deps.pg().get_pipeline_run(run_id)
     if not row:
         raise HTTPException(status_code=404, detail="no such run")
     return row
+
+
+@api.get("/metrics/curve")
+async def metrics_curve(points: int = Query(46, ge=2, le=200)):
+    """Precision/recall/counts at evenly spaced cutoffs — lets a client draw the
+    curve and interpolate slider positions without a request per drag (and lets
+    the static demo bake it)."""
+    await metrics.ensure_loaded(_session())
+    lo, hi = threshold.MIN_CUTOFF, threshold.MAX_CUTOFF
+    cutoffs = [round(lo + (hi - lo) * i / (points - 1), 4) for i in range(points)]
+    rows = [metrics.confusion_at(c) for c in cutoffs]
+    if not rows or not rows[0].get("loaded"):
+        return {"loaded": False}
+    return {
+        "loaded": True,
+        "cutoffs": cutoffs,
+        "precision": [r["precision"] for r in rows],
+        "recall": [r["recall"] for r in rows],
+        "tp": [r["tp"] for r in rows],
+        "fp": [r["fp"] for r in rows],
+        "marked": [r["marked"] for r in rows],
+    }
+
+
+router.include_router(pages)
+router.include_router(api)

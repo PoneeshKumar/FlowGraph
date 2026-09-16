@@ -1,7 +1,9 @@
 import { useState, useEffect, useMemo, useRef } from 'react'
 import { motion, AnimatePresence } from 'motion/react'
-import { METRICS, RECENT_ALERTS, RECENT_TRANSACTIONS, VOLUME_SERIES } from '../data/mockData'
-import { RiskChip, StatusChip, RISK_VAR, useCountUp, useTweenValue } from './ui'
+import { RiskChip, StatusChip, RISK_VAR, useCountUp, useTweenValue, Skeleton, ErrorNote, EmptyNote } from './ui'
+import { useDataSource } from '../services/DataSourceProvider'
+import { useAsync } from '../hooks/useAsync'
+import { fmtAmount, fmtTs, fmtClock, fmtShortDay, fmtDay, fmtIso, flagLabel, shortId, fmtCompact } from '../lib/format'
 
 const DIGITS = [0, 1, 2, 3, 4, 5, 6, 7, 8, 9]
 
@@ -43,82 +45,17 @@ function RollingNumber({ value, format, className }) {
 const PERIODS = [
   { id: '24h', label: '24H' },
   { id: '7d',  label: '7D'  },
-  { id: '30d', label: '30D' },
-  { id: '90d', label: '90D' },
+  { id: 'all', label: 'ALL' },
 ]
-
-const SNAP_MINUTES_24H = 30
-
-function lerp(a, b, t) {
-  return a + (b - a) * t
-}
-
-function formatTimeLabel(totalMinutes) {
-  const h24 = Math.floor(totalMinutes / 60) % 24
-  const m = totalMinutes % 60
-  const h12 = h24 % 12 || 12
-  const suffix = h24 < 12 ? 'a' : 'p'
-  return `${h12}:${String(m).padStart(2, '0')}${suffix}`
-}
-
-function build24hAxisMarks() {
-  const marks = []
-  const dayMinutes = 24 * 60
-  for (let m = 0; m < dayMinutes; m += SNAP_MINUTES_24H) {
-    marks.push({
-      pct: m / dayMinutes,
-      major: m % 60 === 0,
-    })
-  }
-  marks.push({ pct: 1, major: true })
-  return marks
-}
-
-const CHART_H = 220
 
 function indexLeftPct(i, count) {
   return count <= 1 ? 0 : (i / (count - 1)) * 100
 }
 
+const CHART_H = 220
+
 function ptTopPct(y) {
   return (y / CHART_H) * 100
-}
-
-function sampleSeriesAtFrac(base, frac) {
-  const last = base.volume.length - 1
-  const fIdx = frac * last
-  const i = Math.min(Math.floor(fIdx), last - 1)
-  const t = fIdx - i
-  return {
-    volume: lerp(base.volume[i], base.volume[i + 1], t),
-    baseline: lerp(base.baseline[i], base.baseline[i + 1], t),
-    txns: Math.round(lerp(base.txns[i], base.txns[i + 1], t)),
-  }
-}
-
-function buildDense24hSeries(base) {
-  const last = base.volume.length - 1
-  const labels = []
-  const volume = []
-  const baseline = []
-  const txns = []
-  const dayMinutes = 24 * 60
-
-  for (let m = 0; m < dayMinutes; m += SNAP_MINUTES_24H) {
-    const frac = m / dayMinutes
-    const sample = sampleSeriesAtFrac(base, frac)
-    labels.push(formatTimeLabel(m))
-    volume.push(sample.volume)
-    baseline.push(sample.baseline)
-    txns.push(sample.txns)
-  }
-
-  labels.push('Now')
-  volume.push(base.volume[last])
-  baseline.push(base.baseline[last])
-  txns.push(base.txns[last])
-
-  return { labels, volume, baseline, txns }
 }
 
 function tickIndices(count, maxTicks = 12) {
@@ -128,10 +65,26 @@ function tickIndices(count, maxTicks = 12) {
   )
 }
 
+/** Backend series → chart series: labels per bucket, volume in millions, per-bucket txns. */
+function toChartSeries(s, period) {
+  const fmt = period === '24h' ? fmtClock : fmtShortDay
+  const txns = s.txns.map((v, i) => (i === 0 ? v : v - s.txns[i - 1]))
+  return {
+    labels: s.t.map(fmt),
+    volume: s.volume.map(v => v / 1e6),
+    baseline: s.baseline.map(v => v / 1e6),
+    txns,
+    end: s.anchor_ts,
+    // one axis tick per day (7d: 6 h buckets) or per 3 h (24h: 30 min buckets)
+    ticks: period === '7d' ? 8 : period === '24h' ? 9 : 12,
+  }
+}
+
 const STAT_CARDS = [
-  { key: 'activeAccounts', label: 'Active accounts', format: 'count' },
-  { key: 'cyclesDetected', label: 'Cycles detected', format: 'count', tone: 'text-critical' },
-  { key: 'riskAlerts',     label: 'Open alerts',     format: 'count', tone: 'text-high' },
+  { key: 'accounts',        label: 'Accounts',            sub: 'in the graph' },
+  { key: 'scored_accounts', label: 'GNN-scored',          sub: 'with a risk score' },
+  { key: 'communities',     label: 'Communities',         sub: 'Louvain clusters' },
+  { key: 'in_cycle',        label: 'On detected cycles',  sub: 'cycle detector', tone: 'text-critical' },
 ]
 
 function buildPath(values, width, height, padY = 8) {
@@ -151,8 +104,9 @@ function buildPath(values, width, height, padY = 8) {
   return { line, area, pts }
 }
 
+/** value in millions → "97.23M" or "262.88B". */
 function fmtVolumeM(v) {
-  return `$${v.toFixed(2)}M`
+  return Math.abs(v) >= 1000 ? `${(v / 1000).toFixed(2)}B` : `${v.toFixed(2)}M`
 }
 
 function buildRangeInfo(series, startIdx, endIdx) {
@@ -175,13 +129,7 @@ function buildRangeInfo(series, startIdx, endIdx) {
   }
 }
 
-function VolumeChart({ period, onHover, onSelect }) {
-  const baseSeries = VOLUME_SERIES[period]
-  const series = useMemo(() => {
-    if (period !== '24h') return baseSeries
-    return buildDense24hSeries(baseSeries)
-  }, [period, baseSeries])
-
+function VolumeChart({ series, onHover, onSelect }) {
   const chartRef = useRef(null)
   const dragActiveRef = useRef(false)
   const seriesRef = useRef(series)
@@ -309,7 +257,6 @@ function VolumeChart({ period, onHover, onSelect }) {
   const hoverBaselinePt = hoverIndex != null ? baselineGeom.pts[hoverIndex] : null
   const hoverLeftPct = hoverIndex != null ? indexLeftPct(hoverIndex, count) : null
   const lastPt = volumeGeom.pts[volumeGeom.pts.length - 1]
-  const axisMarks24h = period === '24h' ? build24hAxisMarks() : null
 
   const rangeLeftPct = hasSelection ? indexLeftPct(rangeLo, count) : null
   const rangeRightPct = hasSelection ? indexLeftPct(rangeHi, count) : null
@@ -321,7 +268,6 @@ function VolumeChart({ period, onHover, onSelect }) {
 
   return (
     <motion.div
-      key={period}
       initial={{ opacity: 0 }}
       animate={{ opacity: 1 }}
       transition={{ duration: 0.35 }}
@@ -340,7 +286,7 @@ function VolumeChart({ period, onHover, onSelect }) {
             preserveAspectRatio="none"
             className="pointer-events-none absolute inset-0 h-full w-full"
             role="img"
-            aria-label="Network volume over time"
+            aria-label="Cumulative volume over time"
           >
             <defs>
               <linearGradient id="volume-fill" x1="0" y1="0" x2="0" y2="1">
@@ -470,7 +416,7 @@ function VolumeChart({ period, onHover, onSelect }) {
               </div>
               <div className="mt-0.5 whitespace-nowrap font-mono text-[13px] font-semibold tnum">
                 {rangeInfo.pctChange >= 0 ? '+' : ''}{rangeInfo.pctChange.toFixed(2)}%
-                <span className="ml-2 text-[11px] font-normal text-white/60">return</span>
+                <span className="ml-2 text-[11px] font-normal text-white/60">growth</span>
               </div>
               <div className="mt-0.5 whitespace-nowrap font-mono text-[11px] tnum text-white/70">
                 {fmtVolumeM(rangeInfo.startVolume)} → {fmtVolumeM(rangeInfo.endVolume)}
@@ -491,61 +437,34 @@ function VolumeChart({ period, onHover, onSelect }) {
               </div>
               <div className="mt-0.5 whitespace-nowrap font-mono text-[13px] font-semibold tnum">
                 {fmtVolumeM(series.volume[hoverIndex])}
-                <span className="ml-2 text-[11px] font-normal text-white/60">settled</span>
+                <span className="ml-2 text-[11px] font-normal text-white/60">cumulative</span>
               </div>
               <div className="mt-0.5 whitespace-nowrap font-mono text-[11px] tnum text-white/70">
-                {fmtVolumeM(series.baseline[hoverIndex])} baseline
+                {fmtVolumeM(series.baseline[hoverIndex])} uniform pace
               </div>
             </motion.div>
           )}
         </AnimatePresence>
       </div>
 
-      {axisMarks24h ? (
-        <div className="relative mt-2 h-2.5">
-          {axisMarks24h.map((mark, i) => {
-            const markPct = mark.pct * 100
-            const inRange = hasSelection && rangeLeftPct != null && rangeRightPct != null
-              && markPct >= rangeLeftPct - 0.2 && markPct <= rangeRightPct + 0.2
-            const isActive = !hasSelection && hoverLeftPct != null && Math.abs(markPct - hoverLeftPct) < 0.35
-            return (
-              <span
-                key={i}
-                className={`absolute top-0 block w-px -translate-x-1/2 ${
-                  inRange ? 'h-2.5 bg-accent/70' : isActive ? 'h-2.5 bg-ink-3' : mark.major ? 'h-2 bg-ink-4/70' : 'h-1 bg-line-2'
-                }`}
-                style={{ left: `${markPct}%` }}
-              />
-            )
-          })}
-        </div>
-      ) : (
-        <div className="mt-1 flex justify-between px-0.5 font-mono text-[10px] text-ink-4 tnum">
-          {tickIndices(series.labels.length).map(i => (
-            <span key={`${i}-${series.labels[i]}`} className={hoverIndex === i ? 'font-semibold text-ink' : undefined}>
-              {series.labels[i]}
-            </span>
-          ))}
-        </div>
-      )}
+      <div className="mt-1 flex justify-between px-0.5 font-mono text-[10px] text-ink-4 tnum">
+        {tickIndices(series.labels.length, series.ticks).map(i => (
+          <span key={`${i}-${series.labels[i]}`} className={hoverIndex === i ? 'font-semibold text-ink' : undefined}>
+            {series.labels[i]}
+          </span>
+        ))}
+      </div>
     </motion.div>
   )
 }
 
-function StatCard({ label, value, format, delta, tone = 'text-ink' }) {
-  const displayed = useCountUp(value, 800)
-  const formatted = format === 'currency'
-    ? `$${(displayed / 1000000).toFixed(2)}M`
-    : displayed.toLocaleString()
-  const isUp = delta > 0
-
+function StatCard({ label, value, sub, tone = 'text-ink' }) {
+  const displayed = useCountUp(value ?? 0, 800)
   return (
     <div className="min-w-0 flex-1 px-1 py-3">
       <div className="text-[11px] text-ink-3">{label}</div>
-      <div className={`mt-0.5 font-mono text-[17px] font-semibold tnum ${tone}`}>{formatted}</div>
-      <div className={`mt-0.5 text-[11px] tnum ${isUp ? 'text-accent' : 'text-critical'}`}>
-        {isUp ? '+' : ''}{delta}% <span className="text-ink-4">vs prior</span>
-      </div>
+      <div className={`mt-0.5 font-mono text-[17px] font-semibold tnum ${tone}`}>{displayed.toLocaleString()}</div>
+      <div className="mt-0.5 text-[11px] text-ink-4">{sub}</div>
     </div>
   )
 }
@@ -572,49 +491,36 @@ function ExpandLink({ onClick, label }) {
 }
 
 function AlertRow({ alert, isOpen, onToggle, onExpand }) {
-  const tone = RISK_VAR[alert.severity]
+  const tone = RISK_VAR[alert.risk_level]
+  const signals = Object.entries(alert.details?.signals || {}).filter(([, v]) => v).map(([k]) => k)
   return (
     <article className="relative pr-9">
-      <button
-        type="button"
-        onClick={onToggle}
-        className="w-full cursor-pointer py-3.5 text-left transition-colors hover:bg-hover/60"
-      >
+      <button type="button" onClick={onToggle} className="w-full cursor-pointer py-3.5 text-left transition-colors hover:bg-hover/60">
         <div className="flex items-start gap-2.5">
           <span className="mt-1.5 h-[5px] w-[5px] shrink-0 rounded-full" style={{ background: tone }} />
           <div className="min-w-0 flex-1">
             <div className="flex items-baseline justify-between gap-2">
-              <span className="text-[13px] font-medium text-ink">{alert.type}</span>
-              <span className="shrink-0 font-mono text-[10px] text-ink-4">{alert.timestamp}</span>
+              <span className="text-[13px] font-medium text-ink">{flagLabel(alert.flag_type)}</span>
+              <span className="shrink-0 font-mono text-[10px] text-ink-4">{fmtIso(alert.last_detected_at)}</span>
             </div>
-            <p className="mt-0.5 line-clamp-2 text-[12px] leading-snug text-ink-2">{alert.message}</p>
+            <p className="mt-0.5 line-clamp-2 text-[12px] leading-snug text-ink-2">{alert.explanation}</p>
           </div>
         </div>
       </button>
-
       <AnimatePresence initial={false}>
         {isOpen && (
-          <motion.div
-            initial={{ height: 0, opacity: 0 }}
-            animate={{ height: 'auto', opacity: 1 }}
-            exit={{ height: 0, opacity: 0 }}
-            transition={{ duration: 0.28, ease: [0.22, 1, 0.36, 1] }}
-            className="overflow-hidden"
-          >
+          <motion.div initial={{ height: 0, opacity: 0 }} animate={{ height: 'auto', opacity: 1 }} exit={{ height: 0, opacity: 0 }}
+            transition={{ duration: 0.28, ease: [0.22, 1, 0.36, 1] }} className="overflow-hidden">
             <div className="ml-3.5 pb-3 pr-1">
-              <p className="text-[12px] leading-relaxed text-ink-3">{alert.aiExplanation}</p>
-              <p className="mt-2 font-mono text-[11px] text-ink-4 tnum">
-                {alert.account} · ${(alert.amount / 1000).toFixed(0)}K · {alert.confidence}% confidence
+              <p className="font-mono text-[11px] text-ink-4 tnum">
+                {shortId(alert.primary_account)}{alert.account_ids.length > 1 ? ` +${alert.account_ids.length - 1}` : ''} · score {(alert.risk_score * 100).toFixed(0)}%
+                {signals.length > 0 && ` · ${signals.join(', ')}`}
               </p>
             </div>
           </motion.div>
         )}
       </AnimatePresence>
-
-      <ExpandLink
-        onClick={e => { e.stopPropagation(); onExpand() }}
-        label={`Open ${alert.id} in Alerts`}
-      />
+      <ExpandLink onClick={e => { e.stopPropagation(); onExpand() }} label={`Open alert ${alert.id}`} />
     </article>
   )
 }
@@ -647,164 +553,107 @@ function FeedSectionHeader({ title, count, countLabel, countTone = 'text-ink-4',
 function ActivityRow({ tx, isOpen, onToggle, onExpand }) {
   return (
     <article className="relative pr-9">
-      <button
-        type="button"
-        onClick={onToggle}
-        className="flex w-full cursor-pointer items-center gap-3 py-3.5 text-left transition-colors hover:bg-hover/60"
-      >
+      <button type="button" onClick={onToggle} className="flex w-full cursor-pointer items-center gap-3 py-3.5 text-left transition-colors hover:bg-hover/60">
         <div className="min-w-0 flex-1">
-          <div className="truncate font-mono text-[12px] text-ink-2">
-            {tx.from} → {tx.to}
-          </div>
+          <div className="truncate font-mono text-[12px] text-ink-2">{shortId(tx.sender_id)} → {shortId(tx.receiver_id)}</div>
           <div className="mt-0.5 flex items-center gap-2 text-[11px] text-ink-4">
-            <span className="font-mono tnum">{tx.ts}</span>
-            <span>{tx.rail}</span>
+            <span className="font-mono tnum">{fmtTs(tx.ts)}</span>
+            <span>{tx.currency}</span>
           </div>
         </div>
         <div className="shrink-0 text-right">
-          <div className="font-mono text-[13px] font-semibold text-ink tnum">
-            ${tx.amount.toLocaleString()}
-          </div>
+          <div className="font-mono text-[13px] font-semibold text-ink tnum">{fmtAmount(tx.amount_cents)}</div>
           <div className="mt-0.5 flex justify-end gap-1.5">
-            <RiskChip level={tx.risk} />
-            <StatusChip status={tx.status} />
+            <RiskChip level={tx.risk_tier} />
+            <StatusChip status={tx.flagged ? 'flagged' : 'settled'} />
           </div>
         </div>
       </button>
-
       <AnimatePresence initial={false}>
         {isOpen && (
-          <motion.div
-            initial={{ height: 0, opacity: 0 }}
-            animate={{ height: 'auto', opacity: 1 }}
-            exit={{ height: 0, opacity: 0 }}
-            transition={{ duration: 0.28, ease: [0.22, 1, 0.36, 1] }}
-            className="overflow-hidden"
-          >
+          <motion.div initial={{ height: 0, opacity: 0 }} animate={{ height: 'auto', opacity: 1 }} exit={{ height: 0, opacity: 0 }}
+            transition={{ duration: 0.28, ease: [0.22, 1, 0.36, 1] }} className="overflow-hidden">
             <div className="pb-3">
-              <p className="font-mono text-[11px] text-ink-3 tnum">{tx.id}</p>
+              <p className="font-mono text-[11px] text-ink-3 tnum">{tx.txn_id}</p>
               <p className="mt-1.5 text-[12px] leading-relaxed text-ink-3">
-                {tx.rail} transfer of ${tx.amount.toLocaleString()} {tx.currency} from {tx.from} to {tx.to}.
-                {' '}Status: {tx.status}. Risk level: {tx.risk}.
+                {tx.event_type || 'Transfer'} of {fmtAmount(tx.amount_cents)} {tx.currency}. Sender {tx.sender_tier}, receiver {tx.receiver_tier}.
               </p>
             </div>
           </motion.div>
         )}
       </AnimatePresence>
-
-      <ExpandLink
-        onClick={e => { e.stopPropagation(); onExpand() }}
-        label={`Open ${tx.id} in Transactions`}
-      />
+      <ExpandLink onClick={e => { e.stopPropagation(); onExpand() }} label={`Open ${tx.txn_id} in Transactions`} />
     </article>
   )
 }
 
 export default function Dashboard({ onNav }) {
-  const [period, setPeriod] = useState('24h')
+  const { source } = useDataSource()
+  const [period, setPeriod] = useState('7d')
+  const [currency, setCurrency] = useState(null)
   const [openAlertId, setOpenAlertId] = useState(null)
   const [openTxId, setOpenTxId] = useState(null)
-  const [liveCount, setLiveCount] = useState(88421)
   const [hoverPoint, setHoverPoint] = useState(null)
   const [selectRange, setSelectRange] = useState(null)
 
-  const baseVolumeM = METRICS.volume24h.value / 1_000_000
-  const baseDelta = METRICS.volume24h.delta
+  const overview = useAsync(() => source.stats.overview(), [source.mode])
+  const currencies = overview.data?.currencies ?? []
+  const activeCurrency = currency ?? currencies[0]?.code ?? null
+  const seriesQ = useAsync(
+    () => (activeCurrency ? source.stats.series(activeCurrency, period) : Promise.resolve(null)),
+    [source.mode, activeCurrency, period],
+  )
+  const alerts = useAsync(() => source.alerts.list({ limit: FEED_LIMIT, min_level: 'high' }), [source.mode])
+  const txns = useAsync(() => source.transactions.list({ limit: FEED_LIMIT }), [source.mode])
 
-  const heroLabel = selectRange
-    ? `${selectRange.startLabel} – ${selectRange.endLabel}`
-    : hoverPoint
-      ? hoverPoint.label
-      : 'Network volume'
+  const series = useMemo(() => (seriesQ.data ? toChartSeries(seriesQ.data, period) : null), [seriesQ.data, period])
+  const totalM = series ? series.volume[series.volume.length - 1] : 0
+  const totalTxns = series ? series.txns.reduce((a, b) => a + b, 0) : 0
 
-  const targetVolume = selectRange
-    ? selectRange.endVolume
-    : hoverPoint
-      ? hoverPoint.volume
-      : baseVolumeM
-
-  const targetPct = selectRange
-    ? selectRange.pctChange
-    : hoverPoint
-      ? ((hoverPoint.volume - hoverPoint.baseline) / hoverPoint.baseline) * 100
-      : baseDelta
-
-  const pctContext = selectRange ? 'in period' : hoverPoint ? 'vs baseline' : 'today'
-
-  const targetTxns = selectRange
-    ? selectRange.txnsTotal
-    : hoverPoint
-      ? hoverPoint.txns
-      : liveCount
-
-  const txnsContext = selectRange ? 'in this window' : 'processed'
-  const pctIsUp = targetPct >= 0
-
-  useEffect(() => {
-    const iv = setInterval(() => setLiveCount(n => n + Math.floor(Math.random() * 3 + 1)), 900)
-    return () => clearInterval(iv)
-  }, [])
+  const heroLabel = selectRange ? `${selectRange.startLabel} – ${selectRange.endLabel}`
+    : hoverPoint ? hoverPoint.label
+    : `${activeCurrency ?? ''} volume · ${PERIODS.find(p => p.id === period)?.label}`
+  const targetVolume = selectRange ? selectRange.endVolume : hoverPoint ? hoverPoint.volume : totalM
+  const targetTxns = selectRange ? selectRange.txnsTotal : hoverPoint ? hoverPoint.txns : totalTxns
+  const pct = selectRange ? selectRange.pctChange
+    : hoverPoint && hoverPoint.baseline ? ((hoverPoint.volume - hoverPoint.baseline) / hoverPoint.baseline) * 100 : null
+  const ds = overview.data?.dataset
 
   return (
     <div className="flex h-full flex-col overflow-y-auto">
-      {/* ── Hero: volume + chart (Wealthsimple-style) ── */}
+      {/* ── Hero: volume + chart ── */}
       <section className="shrink-0 px-8 pb-6 pt-4">
         <div className="flex flex-wrap items-end justify-between gap-4">
           <div>
-            <p className="text-[13px] text-ink-3">
-              {heroLabel}
-            </p>
+            <p className="text-[13px] text-ink-3">{heroLabel}</p>
             <div className="mt-1 flex flex-wrap items-baseline gap-3">
-              <RollingNumber
-                value={targetVolume}
-                format={v => `$${v.toFixed(2)}M`}
-                className="font-mono text-[36px] font-semibold leading-none tracking-tight text-ink tnum sm:text-[42px]"
-              />
-              <span className={`inline-flex items-center gap-0 text-[14px] font-medium leading-none tnum ${pctIsUp ? 'text-accent' : 'text-critical'}`}>
-                <RollingNumber
-                  value={targetPct}
-                  format={v => `${v >= 0 ? '+' : ''}${v.toFixed(selectRange ? 2 : 1)}%`}
-                />
-                <span className="ml-1 font-normal leading-none text-ink-4">
-                  {pctContext}
-                </span>
-              </span>
-            </div>
-            <p className="mt-2 text-[12px] text-ink-4">
-              <RollingNumber
-                value={targetTxns}
-                format={v => Math.round(v).toLocaleString()}
-                className="font-mono text-ink-3 tnum"
-              />
-              {' '}transactions {txnsContext}
-              {selectRange && (
-                <span className="ml-2 font-mono tnum text-ink-3">
-                  ({selectRange.volumeDelta >= 0 ? '+' : ''}${Math.abs(selectRange.volumeDelta).toFixed(2)}M volume)
+              <RollingNumber value={targetVolume} format={fmtVolumeM}
+                className="font-mono text-[36px] font-semibold leading-none tracking-tight text-ink tnum sm:text-[42px]" />
+              {pct != null && (
+                <span className={`inline-flex items-center text-[14px] font-medium leading-none tnum ${pct >= 0 ? 'text-accent' : 'text-critical'}`}>
+                  <RollingNumber value={pct} format={v => `${v >= 0 ? '+' : ''}${v.toFixed(1)}%`} />
+                  <span className="ml-1 font-normal leading-none text-ink-4">{selectRange ? 'in range' : 'vs uniform pace'}</span>
                 </span>
               )}
+            </div>
+            <p className="mt-2 text-[12px] text-ink-4">
+              <RollingNumber value={targetTxns} format={v => Math.round(v).toLocaleString()} className="font-mono text-ink-3 tnum" />
+              {' '}transactions{selectRange ? ' in this window' : hoverPoint ? ' in this bucket' : ''}
             </p>
           </div>
 
           <div className="flex items-center gap-5">
+            <select value={activeCurrency ?? ''} onChange={e => { setCurrency(e.target.value); setHoverPoint(null); setSelectRange(null) }}
+              className="border-b border-line bg-transparent pb-1 text-[13px] text-ink-2 outline-none">
+              {currencies.map(c => <option key={c.code} value={c.code}>{c.code}</option>)}
+            </select>
             {PERIODS.map(p => (
-              <button
-                key={p.id}
-                type="button"
-                onClick={() => {
-                  setPeriod(p.id)
-                  setHoverPoint(null)
-                  setSelectRange(null)
-                }}
-                className={`relative pb-1 text-[13px] font-medium transition-colors
-                  ${period === p.id ? 'text-ink' : 'text-ink-3 hover:text-ink-2'}`}
-              >
+              <button key={p.id} type="button" onClick={() => { setPeriod(p.id); setHoverPoint(null); setSelectRange(null) }}
+                className={`relative pb-1 text-[13px] font-medium transition-colors ${period === p.id ? 'text-ink' : 'text-ink-3 hover:text-ink-2'}`}>
                 {p.label}
                 {period === p.id && (
-                  <motion.span
-                    layoutId="volume-period"
-                    className="absolute -bottom-0.5 left-0 right-0 h-[2px] rounded-full bg-accent"
-                    transition={{ type: 'spring', stiffness: 480, damping: 36 }}
-                  />
+                  <motion.span layoutId="volume-period" className="absolute -bottom-0.5 left-0 right-0 h-[2px] rounded-full bg-accent"
+                    transition={{ type: 'spring', stiffness: 480, damping: 36 }} />
                 )}
               </button>
             ))}
@@ -812,25 +661,14 @@ export default function Dashboard({ onNav }) {
         </div>
 
         <div className="mt-6">
-          <VolumeChart
-            period={period}
-            onHover={setHoverPoint}
-            onSelect={setSelectRange}
-          />
+          {seriesQ.error ? <ErrorNote error={seriesQ.error} onRetry={seriesQ.reload} />
+            : !series ? <Skeleton className="h-[220px] w-full sm:h-[260px] lg:h-[280px]" />
+            : <VolumeChart key={`${activeCurrency}-${period}`} series={series} onHover={setHoverPoint} onSelect={setSelectRange} />}
           <div className="mt-3 flex flex-wrap items-center gap-4 text-[11px] text-ink-4">
-            <span className="flex items-center gap-2">
-              <span className="h-0.5 w-4 rounded-full bg-accent" />
-              Settled volume
-            </span>
-            <span className="flex items-center gap-2">
-              <span className="h-0 w-4 border-t border-dashed border-ink-4" />
-              Expected baseline
-            </span>
-            <button
-              type="button"
-              onClick={() => onNav('graph')}
-              className="ml-auto text-[12px] font-medium text-accent hover:opacity-70"
-            >
+            <span className="flex items-center gap-2"><span className="h-0.5 w-4 rounded-full bg-accent" />Cumulative volume</span>
+            <span className="flex items-center gap-2"><span className="h-0 w-4 border-t border-dashed border-ink-4" />Uniform pace</span>
+            {series && <span className="font-mono tnum">ends {fmtDay(series.end)}</span>}
+            <button type="button" onClick={() => onNav('graph')} className="ml-auto text-[12px] font-medium text-accent hover:opacity-70">
               Explore network graph →
             </button>
           </div>
@@ -839,70 +677,55 @@ export default function Dashboard({ onNav }) {
 
       {/* ── Secondary stats strip ── */}
       <section className="border-y border-line/60 px-8">
-        <div className="flex flex-wrap divide-x divide-line/60">
-          {STAT_CARDS.map(({ key, label, format, tone }) => (
-            <StatCard
-              key={key}
-              label={label}
-              value={METRICS[key].value}
-              delta={METRICS[key].delta}
-              format={format}
-              tone={tone}
-            />
-          ))}
-          <div className="min-w-0 flex-1 px-1 py-3">
-            <div className="text-[11px] text-ink-3">Avg settlement</div>
-            <div className="mt-0.5 font-mono text-[17px] font-semibold text-ink tnum">4.2m</div>
-            <div className="mt-0.5 text-[11px] text-ink-4">hop latency</div>
+        {overview.error ? <div className="py-3"><ErrorNote error={overview.error} onRetry={overview.reload} /></div> : (
+          <div className="flex flex-wrap divide-x divide-line/60">
+            {STAT_CARDS.map(({ key, label, sub, tone }) => (
+              <StatCard key={key} label={label} value={overview.data?.[key]} sub={sub} tone={tone} />
+            ))}
+            <StatCard label="Open flags" value={overview.data?.open_flags?.total} sub="across all detectors" tone="text-high" />
+            <div className="min-w-0 flex-1 px-1 py-3">
+              <div className="text-[11px] text-ink-3">Dataset</div>
+              <div className="mt-0.5 font-mono text-[13px] font-semibold text-ink tnum">{ds ? `${fmtDay(ds.start_ts)} – ${fmtDay(ds.end_ts)}` : '—'}</div>
+              <div className="mt-0.5 text-[11px] text-ink-4">{ds?.name ?? ''} · {fmtCompact(overview.data?.transactions ?? 0)} transactions</div>
+            </div>
           </div>
-        </div>
+        )}
       </section>
 
-      {/* ── Peer feeds: equal 50/50 columns on md+ ── */}
+      {/* ── Peer feeds ── */}
       <section className="flex-1 border-t border-line-2 px-8 py-8">
         <div className="grid grid-cols-1 md:grid-cols-2 md:gap-0">
           <div className="min-w-0 md:border-r md:border-line-2 md:pr-8">
-            <FeedSectionHeader
-              title="Risk alerts"
-              count={FEED_LIMIT}
-              countLabel={`of ${METRICS.riskAlerts.value} open`}
-              countTone="text-critical"
-              subtitle="Flagged patterns requiring review"
-              onViewAll={() => onNav('alerts')}
-            />
-            <div className="divide-y divide-line/70">
-              {RECENT_ALERTS.slice(0, FEED_LIMIT).map(alert => (
-                <AlertRow
-                  key={alert.id}
-                  alert={alert}
-                  isOpen={openAlertId === alert.id}
-                  onToggle={() => setOpenAlertId(prev => (prev === alert.id ? null : alert.id))}
-                  onExpand={() => onNav('alerts', { alertId: alert.id })}
-                />
-              ))}
-            </div>
+            <FeedSectionHeader title="Risk alerts" count={alerts.data?.items.length ?? 0}
+              countLabel={`of ${(alerts.data?.total ?? 0).toLocaleString()} high or critical`} countTone="text-critical"
+              subtitle="Highest-scoring open flags" onViewAll={() => onNav('alerts')} />
+            {alerts.error ? <ErrorNote error={alerts.error} onRetry={alerts.reload} />
+              : alerts.loading ? <Skeleton className="h-40 w-full" />
+              : alerts.data.items.length === 0 ? <EmptyNote>No open alerts.</EmptyNote> : (
+              <div className="divide-y divide-line/70">
+                {alerts.data.items.map(alert => (
+                  <AlertRow key={alert.id} alert={alert} isOpen={openAlertId === alert.id}
+                    onToggle={() => setOpenAlertId(prev => (prev === alert.id ? null : alert.id))}
+                    onExpand={() => onNav('alerts', { id: alert.id })} />
+                ))}
+              </div>
+            )}
           </div>
 
           <div className="min-w-0 border-t border-line-2 pt-8 md:border-t-0 md:pl-8 md:pt-0">
-            <FeedSectionHeader
-              title="Recent activity"
-              count={FEED_LIMIT}
-              countLabel="live transfers"
-              countTone="text-accent"
-              subtitle="Latest settled and in-flight transfers"
-              onViewAll={() => onNav('transactions')}
-            />
-            <div className="divide-y divide-line/70">
-              {RECENT_TRANSACTIONS.slice(0, FEED_LIMIT).map(tx => (
-                <ActivityRow
-                  key={tx.id}
-                  tx={tx}
-                  isOpen={openTxId === tx.id}
-                  onToggle={() => setOpenTxId(prev => (prev === tx.id ? null : tx.id))}
-                  onExpand={() => onNav('transactions', { txnId: tx.id })}
-                />
-              ))}
-            </div>
+            <FeedSectionHeader title="Latest transfers" count={txns.data?.items.length ?? 0} countLabel="most recent" countTone="text-accent"
+              subtitle="Newest settled transfers in the dataset" onViewAll={() => onNav('transactions')} />
+            {txns.error ? <ErrorNote error={txns.error} onRetry={txns.reload} />
+              : txns.loading ? <Skeleton className="h-40 w-full" />
+              : txns.data.items.length === 0 ? <EmptyNote>No transactions.</EmptyNote> : (
+              <div className="divide-y divide-line/70">
+                {txns.data.items.map(tx => (
+                  <ActivityRow key={tx.txn_id} tx={tx} isOpen={openTxId === tx.txn_id}
+                    onToggle={() => setOpenTxId(prev => (prev === tx.txn_id ? null : tx.txn_id))}
+                    onExpand={() => onNav('transactions', { account: tx.sender_id })} />
+                ))}
+              </div>
+            )}
           </div>
         </div>
       </section>
