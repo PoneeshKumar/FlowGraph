@@ -34,6 +34,11 @@ The GNN scores highest on exactly the structures cycle detection cannot see.
 ## Architecture
 
 ```mermaid
+%%{init: {'theme':'base','themeVariables':{
+  'fontFamily':'ui-sans-serif, system-ui, sans-serif','fontSize':'14px',
+  'primaryColor':'#ffffff','primaryTextColor':'#131c2b','primaryBorderColor':'#c7cfdb',
+  'lineColor':'#8b98ad','clusterBkg':'#f5f7fa','clusterBorder':'#e2e7ee',
+  'edgeLabelBackground':'#f5f7fa'}}}%%
 flowchart TB
     subgraph ingest[Ingestion]
         E[Payment events<br/>ACH · wire · card · crypto] --> K[Kafka]
@@ -72,6 +77,13 @@ Postgres and never ahead of it — a Neo4j outage delays the graph rather than
 corrupting it. Why that shape, and the one gap still in it, is [§2 below](#2-an-outbox-because-dual-writes-lie).
 
 ```mermaid
+%%{init: {'theme':'base','themeVariables':{
+  'fontFamily':'ui-sans-serif, system-ui, sans-serif','fontSize':'14px',
+  'primaryColor':'#ffffff','primaryTextColor':'#131c2b','primaryBorderColor':'#c7cfdb',
+  'lineColor':'#8b98ad','signalColor':'#3e4d66','signalTextColor':'#131c2b',
+  'actorBkg':'#ffffff','actorBorder':'#c7cfdb','actorTextColor':'#131c2b',
+  'labelBoxBkg':'#f5f7fa','labelBoxBorderColor':'#e2e7ee','noteBkgColor':'#f5f7fa',
+  'noteBorderColor':'#e2e7ee','noteTextColor':'#3e4d66'}}}%%
 sequenceDiagram
     participant C as Consumer
     participant P as Postgres
