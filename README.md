@@ -35,7 +35,6 @@ The GNN scores highest on exactly the structures cycle detection cannot see.
 
 ```mermaid
 %%{init: {'theme':'base','themeVariables':{
-  'fontFamily':'ui-sans-serif, system-ui, sans-serif','fontSize':'14px',
   'primaryColor':'#ffffff','primaryTextColor':'#131c2b','primaryBorderColor':'#c7cfdb',
   'lineColor':'#8b98ad','clusterBkg':'#f5f7fa','clusterBorder':'#e2e7ee',
   'edgeLabelBackground':'#f5f7fa'}}}%%
@@ -78,7 +77,6 @@ corrupting it. Why that shape, and the one gap still in it, is [§2 below](#2-an
 
 ```mermaid
 %%{init: {'theme':'base','themeVariables':{
-  'fontFamily':'ui-sans-serif, system-ui, sans-serif','fontSize':'14px',
   'primaryColor':'#ffffff','primaryTextColor':'#131c2b','primaryBorderColor':'#c7cfdb',
   'lineColor':'#8b98ad','signalColor':'#3e4d66','signalTextColor':'#131c2b',
   'actorBkg':'#ffffff','actorBorder':'#c7cfdb','actorTextColor':'#131c2b',
