@@ -30,12 +30,12 @@ CREATE TABLE IF NOT EXISTS transactions (
     authorization_code VARCHAR(6)  -- for matching auth ↔ settlement
 );
 
-CREATE INDEX idx_transactions_sender_id ON transactions(sender_id);
-CREATE INDEX idx_transactions_receiver_id ON transactions(receiver_id);
-CREATE INDEX idx_transactions_timestamp_utc ON transactions(timestamp_utc DESC);
-CREATE INDEX idx_transactions_created_at ON transactions(created_at DESC);
-CREATE INDEX idx_transactions_authorization_code ON transactions(authorization_code);
-CREATE INDEX idx_transactions_status ON transactions(status);
+CREATE INDEX IF NOT EXISTS idx_transactions_sender_id ON transactions(sender_id);
+CREATE INDEX IF NOT EXISTS idx_transactions_receiver_id ON transactions(receiver_id);
+CREATE INDEX IF NOT EXISTS idx_transactions_timestamp_utc ON transactions(timestamp_utc DESC);
+CREATE INDEX IF NOT EXISTS idx_transactions_created_at ON transactions(created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_transactions_authorization_code ON transactions(authorization_code);
+CREATE INDEX IF NOT EXISTS idx_transactions_status ON transactions(status);
 
 -- ==================== OUTBOX TABLE ====================
 -- Intermediate staging table for eventual consistency
@@ -73,15 +73,15 @@ CREATE TABLE IF NOT EXISTS outbox (
 );
 
 -- Index for polling queries: find all pending records, ordered by age
-CREATE INDEX idx_outbox_status_created_at ON outbox(status, created_at ASC)
+CREATE INDEX IF NOT EXISTS idx_outbox_status_created_at ON outbox(status, created_at ASC)
     WHERE status = 'pending';
 
 -- Index for finding records to retry based on last_retry_at
-CREATE INDEX idx_outbox_retry ON outbox(status, last_retry_at)
+CREATE INDEX IF NOT EXISTS idx_outbox_retry ON outbox(status, last_retry_at)
     WHERE status = 'pending';
 
 -- Index for debugging by transaction
-CREATE INDEX idx_outbox_transaction_id ON outbox(transaction_id);
+CREATE INDEX IF NOT EXISTS idx_outbox_transaction_id ON outbox(transaction_id);
 
 -- ==================== MATERIALIZED VIEW (OPTIONAL) ====================
 -- For monitoring: current outbox stats
@@ -99,11 +99,13 @@ BEGIN
 END;
 $$ language 'plpgsql';
 
+DROP TRIGGER IF EXISTS trigger_transactions_updated_at ON transactions;
 CREATE TRIGGER trigger_transactions_updated_at
 BEFORE UPDATE ON transactions
 FOR EACH ROW
 EXECUTE FUNCTION update_updated_at_column();
 
+DROP TRIGGER IF EXISTS trigger_outbox_updated_at ON outbox;
 CREATE TRIGGER trigger_outbox_updated_at
 BEFORE UPDATE ON outbox
 FOR EACH ROW

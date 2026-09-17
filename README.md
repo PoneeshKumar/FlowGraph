@@ -73,7 +73,8 @@ flowchart TB
 **The write path is the part worth reading.** Postgres is written first and the
 graph follows through an outbox, so the graph is eventually consistent with
 Postgres and never ahead of it — a Neo4j outage delays the graph rather than
-corrupting it. Why that shape, and the one gap still in it, is [§2 below](#2-an-outbox-because-dual-writes-lie).
+corrupting it. Why that shape, and where it is easy to get wrong,
+is [§2 below](#2-an-outbox-because-dual-writes-lie).
 
 ```mermaid
 %%{init: {'theme':'base','themeVariables':{
@@ -88,8 +89,7 @@ sequenceDiagram
     participant W as Outbox worker
     participant N as Neo4j
     participant S as Live scorer
-    C->>P: INSERT transaction
-    C->>P: INSERT outbox row
+    C->>P: INSERT transaction + outbox row (one transaction)
     W->>P: poll pending
     W->>N: MERGE accounts, increment FLOWS_TO aggregates
     W->>P: mark synced (or back off and retry)
@@ -129,21 +129,30 @@ overwritten — which is only safe because the outbox below guarantees once-deli
 Writing to Postgres and Neo4j inside one handler is a distributed transaction with
 no coordinator: the second write can fail and there is no way to roll the first
 back, so the two stores silently diverge. Instead the consumer records the payment
-in Postgres plus a row in an `outbox` table, and `OutboxSyncWorker` drains that
-table into Neo4j and Redis on a loop — retrying with exponential backoff, tracking
-`retry_count` and `last_error`, and marking a row synced only once the graph write
-succeeded. The Neo4j write is idempotent (`MERGE` on `txn_id`), so a retry after a
-partial failure cannot double-count an aggregate.
+**and** a row in an `outbox` table in a single Postgres transaction, and
+`OutboxSyncWorker` drains that table into Neo4j and Redis on a loop — retrying with
+exponential backoff, tracking `retry_count` and `last_error`, and marking a row
+synced only once the graph write succeeded. The Neo4j write is idempotent (`MERGE`
+on `txn_id`), so a retry after a partial failure cannot double-count an aggregate.
+
+The single transaction is the load-bearing part, and it is easy to get subtly
+wrong: if the two rows commit separately, a crash in between leaves a payment in
+the ledger that the sync worker never sees — not lost, not retried, just silently
+absent from the graph forever. `PostgresClient.transaction()` hands one connection
+to both writes so they land together or not at all:
+
+```python
+async with postgres_client.transaction() as conn:
+    await postgres_client.save_transaction(..., conn=conn)
+    await postgres_client.insert_outbox(..., conn=conn)
+```
+
+`tests/test_outbox_atomicity.py` pins the behaviour: a simulated crash and a
+foreign-key violation must each leave *no* payment row behind, and a redelivered
+event must be a no-op rather than a duplicate.
 
 The graph is therefore eventually consistent with Postgres and *never ahead of it*.
 A Neo4j outage delays the graph; it cannot corrupt it.
-
-> **Known gap, honestly:** the transaction row and its outbox row are currently
-> written through two separate connections, so they are two commits rather than
-> one. A crash in the narrow window between them leaves a payment in Postgres that
-> never reaches the graph. The fix is to pass one connection through both writes —
-> `insert_outbox`'s own docstring already says it should be called in the same
-> transaction. Tracked, not yet done.
 
 ### 3. Redis sorted sets for time windows
 
