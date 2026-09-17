@@ -73,6 +73,32 @@ class PostgresClient:
         finally:
             await self.pool.release(conn)
 
+    @asynccontextmanager
+    async def _conn_or(self, conn: Optional[Connection]):
+        """Use the caller's connection — so the write joins their transaction — or
+        take one from the pool for a standalone write."""
+        if conn is not None:
+            yield conn
+        else:
+            async with self._get_connection() as pooled:
+                yield pooled
+
+    @asynccontextmanager
+    async def transaction(self):
+        """One connection inside one transaction, for writes that must land together.
+
+        The outbox pattern depends on this: a payment row and its outbox row have to
+        commit atomically, or a crash between them strands a payment in Postgres that
+        never reaches the graph. Pass the yielded connection to each write:
+
+            async with pg.transaction() as conn:
+                await pg.save_transaction(..., conn=conn)
+                await pg.insert_outbox(..., conn=conn)
+        """
+        async with self._get_connection() as conn:
+            async with conn.transaction():
+                yield conn
+
     # ==================== TRANSACTION MANAGEMENT ====================
 
     async def save_transaction(
@@ -89,10 +115,15 @@ class PostgresClient:
         raw_payload: Dict[str, Any],
         schema_version: int = 1,
         authorization_code: Optional[str] = None,
+        conn: Optional[Connection] = None,
     ) -> None:
         """
         Save a payment transaction to the transactions table.
-        
+
+        Pass `conn` from `transaction()` to commit this together with the outbox
+        row; omit it for a standalone write (the bulk ingest does this — it writes
+        the graph directly and needs no outbox entry).
+
         Args:
             transaction_id: UUID of the transaction
             rail: Payment rail (CARD, WIRE, ACH, CRYPTO)
@@ -106,6 +137,7 @@ class PostgresClient:
             raw_payload: Original raw event payload
             schema_version: Schema version (default 1)
             authorization_code: Auth code for settlement matching (optional)
+            conn: Join this existing transaction instead of taking a pooled connection
         """
         query = f"""
         INSERT INTO {TRANSACTIONS_TABLE_NAME} (
@@ -120,8 +152,8 @@ class PostgresClient:
             updated_at = CURRENT_TIMESTAMP
         """
 
-        async with self._get_connection() as conn:
-            await conn.execute(
+        async with self._conn_or(conn) as c:
+            await c.execute(
                 query,
                 transaction_id,
                 rail,
@@ -155,16 +187,22 @@ class PostgresClient:
         idempotency_key: str,
         event_payload: Dict[str, Any],
         neo4j_write_payload: Optional[Dict[str, Any]] = None,
+        conn: Optional[Connection] = None,
     ) -> None:
         """
         Insert an outbox entry for a transaction.
-        Should be called in same transaction as save_transaction().
-        
+
+        Must be called with the `conn` from `transaction()`, alongside
+        save_transaction() — that is the whole point of the outbox. Writing the two
+        rows in separate transactions reintroduces the gap the pattern exists to
+        close: a crash in between leaves a payment that never reaches the graph.
+
         Args:
             transaction_id: UUID of the transaction
             idempotency_key: Unique key to prevent duplicate retries
             event_payload: Serialized transaction data for replay
             neo4j_write_payload: Pre-computed Neo4j MERGE payload (optional)
+            conn: Join this existing transaction instead of taking a pooled connection
         """
         query = f"""
         INSERT INTO {OUTBOX_TABLE_NAME} (
@@ -174,8 +212,8 @@ class PostgresClient:
         ON CONFLICT (idempotency_key) DO NOTHING
         """
 
-        async with self._get_connection() as conn:
-            await conn.execute(
+        async with self._conn_or(conn) as c:
+            await c.execute(
                 query,
                 transaction_id,
                 idempotency_key,
@@ -458,6 +496,18 @@ class PostgresClient:
         return int(n)
 
     # ==================== APP META (key/value) ====================
+
+    async def ensure_transaction_tables(self) -> None:
+        """Apply migration 001 — the `transactions` and `outbox` tables.
+
+        Self-applying and idempotent, matching how the detectors bring up
+        `risk_flags`. Without this nothing creates these two tables, so the
+        consumer's write path fails on a fresh database.
+        """
+        sql = (Path(__file__).resolve().parent.parent / "migrations"
+               / "001_create_outbox_table.sql").read_text()
+        async with self._get_connection() as conn:
+            await conn.execute(sql)
 
     async def ensure_app_meta_table(self) -> None:
         """Apply migration 004 (idempotent) — same self-applying convention the
