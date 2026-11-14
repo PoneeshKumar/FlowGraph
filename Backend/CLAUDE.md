@@ -532,6 +532,10 @@ differs from the container).
 
 **Dual-write consistency** — write to Postgres first with `pending_graph_sync = true`. Background outbox worker reads pending rows, writes to Neo4j, clears flag on success. Graph is eventually consistent with Postgres, never ahead of it. Retries use exponential backoff.
 
+**The payment row and its outbox row must commit together.** Use `PostgresClient.transaction()` and pass its connection to both `save_transaction(conn=…)` and `insert_outbox(conn=…)`. Writing them on two pooled connections (which is what the consumer did until it was fixed) reopens the exact gap the outbox exists to close: a crash between the two commits strands a payment in the ledger that the sync worker never sees — not lost, not retried, silently absent from the graph. `tests/test_outbox_atomicity.py` pins it. Both writes are idempotent (`ON CONFLICT` on `id` and `idempotency_key`), so Kafka redelivery replays safely inside the same transaction. `save_transaction` without a `conn` is still fine for the bulk ingest, which writes the graph directly and needs no outbox row.
+
+**Migrations are self-applying and must stay idempotent.** `ensure_transaction_tables()` (001), the detectors' `risk_flags` bootstrap (002) and `ensure_app_meta_table()` (004) each execute their `.sql` on startup, so every statement needs `IF NOT EXISTS` — and triggers, which have no such form in Postgres, need a preceding `DROP TRIGGER IF EXISTS`. Nothing applied 001 at all until this was fixed, so `transactions` and `outbox` simply did not exist on a fresh database and the consumer's write path failed.
+
 **Neo4j upserts** — use `MERGE` inside a transaction to atomically create nodes if missing. `TRANSFER` is MERGEd on `txn_id` (idempotent on outbox retry). `FLOWS_TO` is MERGEd on the account pair and its aggregates (`tx_count`, `total_amount`, min/max amount, first/last ts) are incremented on match. Never plain `CREATE`. Aggregate double-counting on `FLOWS_TO` is prevented by the outbox's once-delivery guarantee.
 
 **Time-windowed queries** — do not hit Neo4j for volume in a time window. Use Redis ZRANGEBYSCORE on the relevant sorted set. Microsecond latency.

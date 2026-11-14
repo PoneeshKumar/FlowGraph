@@ -122,37 +122,42 @@ async def _write_to_postgres(normalized_event: Any, raw_payload: Dict[str, Any])
             f"{normalized_event.event_id}:{normalized_event.timestamp_utc.isoformat()}".encode()
         ).hexdigest()
 
-        # Save transaction to Postgres
-        await postgres_client.save_transaction(
-            transaction_id=str(normalized_event.event_id),
-            rail=normalized_event.rail.value,
-            event_type=normalized_event.event_type.value,
-            status=normalized_event.status.value,
-            sender_id=normalized_event.sender_id,
-            receiver_id=normalized_event.receiver_id,
-            amount_cents=normalized_event.amount_cents,
-            currency=normalized_event.currency,
-            timestamp_utc=normalized_event.timestamp_utc,
-            raw_payload=raw_payload,
-            schema_version=normalized_event.schema_version,
-            authorization_code=getattr(normalized_event, "authorization_code", None),
-        )
+        # Both rows commit together or neither does. Splitting them across two
+        # transactions reopens the gap the outbox exists to close: a crash in
+        # between would leave a payment in Postgres that never reaches the graph.
+        async with postgres_client.transaction() as conn:
+            await postgres_client.save_transaction(
+                transaction_id=str(normalized_event.event_id),
+                rail=normalized_event.rail.value,
+                event_type=normalized_event.event_type.value,
+                status=normalized_event.status.value,
+                sender_id=normalized_event.sender_id,
+                receiver_id=normalized_event.receiver_id,
+                amount_cents=normalized_event.amount_cents,
+                currency=normalized_event.currency,
+                timestamp_utc=normalized_event.timestamp_utc,
+                raw_payload=raw_payload,
+                schema_version=normalized_event.schema_version,
+                authorization_code=getattr(normalized_event, "authorization_code", None),
+                conn=conn,
+            )
 
-        # Insert outbox row (triggers async sync to Neo4j/Redis)
-        await postgres_client.insert_outbox(
-            transaction_id=str(normalized_event.event_id),
-            idempotency_key=idempotency_key,
-            event_payload={
-                "event_id": str(normalized_event.event_id),
-                "rail": normalized_event.rail.value,
-                "event_type": normalized_event.event_type.value,
-                "sender_id": normalized_event.sender_id,
-                "receiver_id": normalized_event.receiver_id,
-                "amount_cents": normalized_event.amount_cents,
-                "currency": normalized_event.currency,
-                "timestamp_utc": normalized_event.timestamp_utc.isoformat(),
-            },
-        )
+            # Outbox row — the background worker turns this into the graph write.
+            await postgres_client.insert_outbox(
+                transaction_id=str(normalized_event.event_id),
+                idempotency_key=idempotency_key,
+                event_payload={
+                    "event_id": str(normalized_event.event_id),
+                    "rail": normalized_event.rail.value,
+                    "event_type": normalized_event.event_type.value,
+                    "sender_id": normalized_event.sender_id,
+                    "receiver_id": normalized_event.receiver_id,
+                    "amount_cents": normalized_event.amount_cents,
+                    "currency": normalized_event.currency,
+                    "timestamp_utc": normalized_event.timestamp_utc.isoformat(),
+                },
+                conn=conn,
+            )
 
         logger.debug(f"Outbox entry created for event {normalized_event.event_id}")
 

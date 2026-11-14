@@ -57,7 +57,10 @@ class FlowGraphBackend:
             
             self.postgres_client = PostgresClient()
             await self.postgres_client.initialize()
-            
+            # transactions + outbox (migration 001). Idempotent, and nothing else
+            # creates them — without this the consumer's write path has no tables.
+            await self.postgres_client.ensure_transaction_tables()
+
             self.neo4j_client = Neo4jClient()
             await self.neo4j_client.initialize()
             await self.neo4j_client.init_constraints()   # Account + TRANSFER uniqueness
